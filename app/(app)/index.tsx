@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Image, ActivityIndicator, RefreshControl } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Image, ActivityIndicator, RefreshControl, TextInput } from 'react-native';
 import { Search, MapPin, Clock, Users } from 'lucide-react-native';
 import { supabase } from '@/lib/supabase';
 import { router } from 'expo-router';
@@ -24,6 +24,7 @@ type FormattedRide = {
   departure_time: string;
   available_seats: number;
   price: number;
+  vehicle_name: string;
   driver: {
     id: string;
     full_name: string;
@@ -33,6 +34,8 @@ type FormattedRide = {
 
 export default function HomeScreen() {
   const [rides, setRides] = useState<FormattedRide[]>([]);
+  const [filteredRides, setFilteredRides] = useState<FormattedRide[]>([]);
+  const [searchQuery, setSearchQuery] = useState('');
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -41,7 +44,6 @@ export default function HomeScreen() {
     try {
       console.log('Fetching rides...');
       
-      // First approach: Try direct query without joins
       const { data, error } = await supabase
         .from('rides')
         .select('*')
@@ -56,7 +58,6 @@ export default function HomeScreen() {
       console.log('Fetched rides:', data?.length || 0);
       
       if (data && data.length > 0) {
-        // Transform the data to match the expected format
         const formattedRides: FormattedRide[] = data.map((ride: any) => ({
           id: ride.id,
           pickup_location: ride.pickup_location,
@@ -64,6 +65,7 @@ export default function HomeScreen() {
           departure_time: ride.departure_time,
           available_seats: ride.available_seats,
           price: ride.price,
+          vehicle_name: ride.vehicle_name || 'Unknown Vehicle',
           driver: {
             id: ride.driver_id || 'unknown',
             full_name: ride.driver_full_name || 'Unknown Driver',
@@ -72,9 +74,10 @@ export default function HomeScreen() {
         }));
         
         setRides(formattedRides);
+        setFilteredRides(formattedRides); // Initially show all rides
       } else {
-        // If no data is returned, set empty array
         setRides([]);
+        setFilteredRides([]);
         console.log('No active rides found');
       }
     } catch (err) {
@@ -90,9 +93,26 @@ export default function HomeScreen() {
     fetchRides();
   }, []);
 
+  // Filter rides when search query changes
+  useEffect(() => {
+    if (searchQuery.trim() === '') {
+      setFilteredRides(rides);
+    } else {
+      const lowerCaseQuery = searchQuery.toLowerCase();
+      const filtered = rides.filter(ride => 
+        ride.dropoff_location.toLowerCase().includes(lowerCaseQuery)
+      );
+      setFilteredRides(filtered);
+    }
+  }, [searchQuery, rides]);
+
   const onRefresh = () => {
     setRefreshing(true);
     fetchRides();
+  };
+
+  const handleSearchChange = (text: string) => {
+    setSearchQuery(text);
   };
 
   if (loading) {
@@ -106,14 +126,20 @@ export default function HomeScreen() {
   return (
     <View style={styles.container}>
       <View style={styles.header}>
-        <Text style={styles.greeting}>Good morning, Alex</Text>
+        <Text style={styles.greeting}>Good morning</Text>
         <Text style={styles.title}>Find a ride</Text>
       </View>
 
-      <TouchableOpacity style={styles.searchBar}>
+      <View style={styles.searchBar}>
         <Search size={20} color="#64748B" />
-        <Text style={styles.searchText}>Where are you going?</Text>
-      </TouchableOpacity>
+        <TextInput
+          style={styles.searchInput}
+          placeholder="Where are you going?"
+          placeholderTextColor="#64748B"
+          value={searchQuery}
+          onChangeText={handleSearchChange}
+        />
+      </View>
 
       <ScrollView 
         style={styles.content} 
@@ -136,16 +162,20 @@ export default function HomeScreen() {
           <>
             <Text style={styles.sectionTitle}>Available Rides</Text>
             
-            {rides.length === 0 ? (
+            {filteredRides.length === 0 ? (
               <View style={styles.noRidesContainer}>
-                <Text style={styles.noRidesText}>No rides available at the moment</Text>
+                <Text style={styles.noRidesText}>
+                  {searchQuery.trim() !== '' 
+                    ? `No rides found to ${searchQuery}` 
+                    : 'No rides available at the moment'}
+                </Text>
               </View>
             ) : (
-              rides.map((ride) => (
+              filteredRides.map((ride) => (
                 <TouchableOpacity 
                   key={ride.id} 
                   style={styles.rideCard}
-                  onPress={() => router.push(`/ride/${ride.id}`)}
+                  onPress={() => router.push(`./components/ride/${ride.id}`)}
                 >
                   <View style={styles.rideHeader}>
                     <Image
@@ -157,7 +187,7 @@ export default function HomeScreen() {
                     />
                     <View>
                       <Text style={styles.driverName}>{ride.driver.full_name}</Text>
-                      <Text style={styles.carInfo}>Tesla Model 3 • White</Text>
+                      <Text style={styles.carInfo}>{ride.vehicle_name}</Text>
                     </View>
                     <Text style={styles.price}>${ride.price}</Text>
                   </View>
@@ -244,6 +274,13 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     borderWidth: 1,
     borderColor: '#E2E8F0',
+  },
+  searchInput: {
+    flex: 1,
+    marginLeft: 12,
+    fontSize: 16,
+    color: '#1E293B',
+    fontFamily: 'Inter-Regular',
   },
   searchText: {
     marginLeft: 12,

@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { View, Text, TextInput, TouchableOpacity, StyleSheet, Image, ActivityIndicator } from 'react-native';
+import { View, Text, TextInput, TouchableOpacity, StyleSheet, Image, ActivityIndicator, Alert } from 'react-native';
 import { Link, router } from 'expo-router';
 import { UserPlus } from 'lucide-react-native';
 import { signUp } from '@/lib/auth';
@@ -8,15 +8,69 @@ export default function RegisterScreen() {
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [phoneNumber, setPhoneNumber] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState(false);
 
   const handleSignUp = async () => {
+    // Basic validation
+    if (!name.trim()) {
+      setError('Please enter your name');
+      return;
+    }
+    
+    if (!email.trim()) {
+      setError('Please enter your email');
+      return;
+    }
+    
+    if (password.length < 6) {
+      setError('Password must be at least 6 characters');
+      return;
+    }
+
+    if (!phoneNumber.trim()) {
+      setError('Please enter your phone number');
+      return;
+    }
+
+    // Validate phone number format - only allow digits
+    if (!/^\d+$/.test(phoneNumber)) {
+      setError('Phone number must contain only digits');
+      return;
+    }
+
     try {
       setLoading(true);
       setError(null);
-      await signUp(email, password, name);
+      
+      console.log("Starting signup process with:", { email, name, phoneNumber });
+      
+      // Pass phone number as an additional parameter to the signUp function
+      const result = await signUp({
+        email, 
+        password, 
+        fullName: name, 
+        phoneNumber: phoneNumber
+      });
+      
+      console.log("Signup result:", result);
+      
+      // Check the result to see if it was successful
+      if (result && result.user) {
+        setSuccess(true);
+        Alert.alert(
+          "Account Created Successfully!",
+          "Please check your email for a confirmation link to verify your account.",
+          [{ text: "OK", onPress: () => router.push('/login') }]
+        );
+      } else {
+        // If we don't have a result.user but also no error was thrown
+        setError('Account created but verification is required. Please check your email.');
+      }
     } catch (err) {
+      console.error('Registration error:', err);
       setError(err instanceof Error ? err.message : 'Failed to create account');
     } finally {
       setLoading(false);
@@ -47,6 +101,14 @@ export default function RegisterScreen() {
             <Text style={styles.errorText}>{error}</Text>
           </View>
         )}
+        
+        {success && (
+          <View style={styles.successContainer}>
+            <Text style={styles.successText}>
+              Account created! Please check your email for verification instructions.
+            </Text>
+          </View>
+        )}
 
         <TextInput
           style={styles.input}
@@ -54,7 +116,7 @@ export default function RegisterScreen() {
           value={name}
           onChangeText={setName}
           autoCapitalize="words"
-          editable={!loading}
+          editable={!loading && !success}
         />
         <TextInput
           style={styles.input}
@@ -63,7 +125,15 @@ export default function RegisterScreen() {
           onChangeText={setEmail}
           autoCapitalize="none"
           keyboardType="email-address"
-          editable={!loading}
+          editable={!loading && !success}
+        />
+        <TextInput
+          style={styles.input}
+          placeholder="Phone Number"
+          value={phoneNumber}
+          onChangeText={setPhoneNumber}
+          keyboardType="phone-pad"
+          editable={!loading && !success}
         />
         <TextInput
           style={styles.input}
@@ -71,27 +141,36 @@ export default function RegisterScreen() {
           value={password}
           onChangeText={setPassword}
           secureTextEntry
-          editable={!loading}
+          editable={!loading && !success}
         />
 
         <TouchableOpacity 
-          style={[styles.button, loading && styles.buttonDisabled]}
+          style={[
+            styles.button, 
+            (loading || success) && styles.buttonDisabled
+          ]}
           onPress={handleSignUp}
-          disabled={loading}
+          disabled={loading || success}
         >
           {loading ? (
             <ActivityIndicator color="#fff" />
           ) : (
             <>
               <UserPlus color="white" size={20} style={styles.buttonIcon} />
-              <Text style={styles.buttonText}>Create Account</Text>
+              <Text style={styles.buttonText}>
+                {success ? 'Account Created' : 'Create Account'}
+              </Text>
             </>
           )}
         </TouchableOpacity>
 
         <Link href="/login" asChild>
           <TouchableOpacity style={styles.linkButton}>
-            <Text style={styles.linkText}>Already have an account? Sign in</Text>
+            <Text style={styles.linkText}>
+              {success 
+                ? 'Go to Sign In'
+                : 'Already have an account? Sign in'}
+            </Text>
           </TouchableOpacity>
         </Link>
       </View>
@@ -156,6 +235,17 @@ const styles = StyleSheet.create({
   },
   errorText: {
     color: '#DC2626',
+    fontFamily: 'Inter-Medium',
+    fontSize: 14,
+  },
+  successContainer: {
+    backgroundColor: '#DCFCE7',
+    padding: 16,
+    borderRadius: 12,
+    marginBottom: 16,
+  },
+  successText: {
+    color: '#166534',
     fontFamily: 'Inter-Medium',
     fontSize: 14,
   },

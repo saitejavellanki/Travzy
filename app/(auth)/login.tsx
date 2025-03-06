@@ -1,8 +1,8 @@
-import { useState } from 'react';
-import { View, Text, TextInput, TouchableOpacity, StyleSheet, Image, ActivityIndicator } from 'react-native';
-import { Link } from 'expo-router';
+import { useState, useEffect } from 'react';
+import { View, Text, TextInput, TouchableOpacity, StyleSheet, Image, ActivityIndicator, Alert } from 'react-native';
+import { Link, router } from 'expo-router'; // Import router
 import { LogIn } from 'lucide-react-native';
-import { signIn } from '@/lib/auth';
+import { signIn, getCurrentUser } from '@/lib/auth';
 
 export default function LoginScreen() {
   const [email, setEmail] = useState('');
@@ -10,12 +10,61 @@ export default function LoginScreen() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Check if user is already logged in
+  useEffect(() => {
+    const checkCurrentUser = async () => {
+      try {
+        setLoading(true);
+        const user = await getCurrentUser();
+        if (user) {
+          // User is already logged in, redirect to home
+          console.log("User already logged in:", user);
+          router.replace('/(tabs)'); // Navigate to your app's main screen
+        }
+      } catch (err) {
+        console.error("Error checking current user:", err);
+      } finally {
+        setLoading(false);
+      }
+    };
+    
+    checkCurrentUser();
+  }, []);
+
   const handleSignIn = async () => {
+    // Basic validation
+    if (!email.trim()) {
+      setError('Please enter your email');
+      return;
+    }
+    
+    if (!password.trim()) {
+      setError('Please enter your password');
+      return;
+    }
+    
     try {
       setLoading(true);
       setError(null);
-      await signIn(email, password);
+      
+      console.log("Attempting to sign in with:", email);
+      const userData = await signIn(email, password);
+      console.log("Sign in successful:", userData);
+      
+      // If we get here, sign in was successful
+      Alert.alert(
+        "Login Successful",
+        "Welcome back to CampusRide!",
+        [{ 
+          text: "Continue", 
+          onPress: () => {
+            // Navigate to the main app screen
+            router.replace('/(app)'); // or your main screen path
+          }
+        }]
+      );
     } catch (err) {
+      console.error("Login error:", err);
       setError(err instanceof Error ? err.message : 'Failed to sign in');
     } finally {
       setLoading(false);
@@ -79,6 +128,13 @@ export default function LoginScreen() {
             <Text style={styles.linkText}>Don't have an account? Sign up</Text>
           </TouchableOpacity>
         </Link>
+
+        <TouchableOpacity 
+          style={styles.forgotPasswordButton}
+          onPress={() => router.push('/forgot-password')}
+        >
+          <Text style={styles.forgotPasswordText}>Forgot password?</Text>
+        </TouchableOpacity>
       </View>
     </View>
   );
@@ -171,6 +227,15 @@ const styles = StyleSheet.create({
   },
   linkText: {
     color: '#3B82F6',
+    fontSize: 14,
+    fontFamily: 'Inter-Medium',
+  },
+  forgotPasswordButton: {
+    marginTop: 12,
+    alignItems: 'center',
+  },
+  forgotPasswordText: {
+    color: '#64748B',
     fontSize: 14,
     fontFamily: 'Inter-Medium',
   },
