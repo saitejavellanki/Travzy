@@ -1,44 +1,81 @@
 import { useState, useEffect } from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Image, ActivityIndicator, RefreshControl, TextInput } from 'react-native';
-import { Search, MapPin, Clock, Users } from 'lucide-react-native';
+import { Search, MapPin, Clock, Users, Check } from 'lucide-react-native';
 import { supabase } from '@/lib/supabase';
 import { router } from 'expo-router';
 
-type Ride = {
-  id: string;
-  pickup_location: string;
-  dropoff_location: string;
-  departure_time: string;
-  available_seats: number;
-  price: number;
-  driver_id: string;
-  driver_full_name: string;
-  driver_avatar_url: string | null;
-  status: string;
-};
-
-type FormattedRide = {
-  id: string;
-  pickup_location: string;
-  dropoff_location: string;
-  departure_time: string;
-  available_seats: number;
-  price: number;
-  vehicle_name: string;
-  driver: {
-    id: string;
-    full_name: string;
-    avatar_url: string;
-  };
-};
+// ... existing type definitions
 
 export default function HomeScreen() {
-  const [rides, setRides] = useState<FormattedRide[]>([]);
-  const [filteredRides, setFilteredRides] = useState<FormattedRide[]>([]);
+  const [rides, setRides] = useState([]);
+  const [filteredRides, setFilteredRides] = useState([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState(null);
+  const [userRideRequests, setUserRideRequests] = useState([]);
+  const [currentUserId, setCurrentUserId] = useState(null);
+
+  // Fetch current user
+  const fetchCurrentUser = async () => {
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (user) {
+        setCurrentUserId(user.id);
+        return user.id;
+      }
+      return null;
+    } catch (err) {
+      console.error('Error fetching current user:', err);
+      return null;
+    }
+  };
+
+  // Fetch user's ride requests
+  // Updated fetchUserRideRequests function
+const fetchUserRideRequests = async (userId) => {
+  if (!userId) return;
+  
+  try {
+    // First fetch the ride requests
+    const { data: requestsData, error: requestsError } = await supabase
+      .from('ride_requests')
+      .select('id, status, seats_requested, ride_id')
+      .eq('passenger_id', userId);
+      
+    if (requestsError) throw requestsError;
+    
+    if (!requestsData || requestsData.length === 0) {
+      setUserRideRequests([]);
+      return;
+    }
+    
+    // Get all ride IDs from the requests
+    const rideIds = requestsData.map(request => request.ride_id);
+    
+    // Fetch the rides information
+    const { data: ridesData, error: ridesError } = await supabase
+      .from('rides')
+      .select('*')
+      .in('id', rideIds);
+      
+    if (ridesError) throw ridesError;
+    
+    // Combine the data
+    const combinedData = requestsData.map(request => {
+      const relatedRide = ridesData.find(ride => ride.id === request.ride_id);
+      return {
+        ...request,
+        ride: relatedRide || null
+      };
+    });
+    
+    console.log('User ride requests with ride data:', combinedData);
+    setUserRideRequests(combinedData);
+  } catch (err) {
+    console.error('Error fetching user ride requests:', err);
+  }
+};
 
   const fetchRides = async () => {
     try {
@@ -58,7 +95,7 @@ export default function HomeScreen() {
       console.log('Fetched rides:', data?.length || 0);
       
       if (data && data.length > 0) {
-        const formattedRides: FormattedRide[] = data.map((ride: any) => ({
+        const formattedRides = data.map((ride) => ({
           id: ride.id,
           pickup_location: ride.pickup_location,
           dropoff_location: ride.dropoff_location,
@@ -89,8 +126,17 @@ export default function HomeScreen() {
     }
   };
 
+  // Initialize data
   useEffect(() => {
-    fetchRides();
+    const initializeData = async () => {
+      const userId = await fetchCurrentUser();
+      await Promise.all([
+        fetchRides(),
+        fetchUserRideRequests(userId)
+      ]);
+    };
+    
+    initializeData();
   }, []);
 
   // Filter rides when search query changes
@@ -106,14 +152,21 @@ export default function HomeScreen() {
     }
   }, [searchQuery, rides]);
 
-  const onRefresh = () => {
+  const onRefresh = async () => {
     setRefreshing(true);
-    fetchRides();
+    await fetchRides();
+    await fetchUserRideRequests(currentUserId);
+    setRefreshing(false);
   };
 
-  const handleSearchChange = (text: string) => {
+  const handleSearchChange = (text) => {
     setSearchQuery(text);
   };
+
+  // Get accepted ride requests
+  const acceptedRideRequests = userRideRequests.filter(request => 
+    request.status.toLowerCase() === 'accepted'
+  );
 
   if (loading) {
     return (
@@ -148,6 +201,76 @@ export default function HomeScreen() {
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
         }
       >
+        {/* Accepted Rides Section */}
+       {/* Accepted Rides Section */}
+{acceptedRideRequests.length > 0 && (
+  <>
+    <Text style={styles.sectionTitle}>Your Accepted Rides</Text>
+    {acceptedRideRequests.map((request) => {
+      const ride = request.ride;
+      
+      // Skip if we don't have ride data
+      if (!ride) return null;
+      
+      return (
+        <TouchableOpacity 
+          key={request.id} 
+          style={[styles.rideCard, styles.acceptedRideCard]}
+          onPress={() => router.push(`./components/ride/${ride.id}`)}
+        >
+          <View style={styles.acceptedBadge}>
+            <Check size={16} color="#fff" />
+            <Text style={styles.acceptedBadgeText}>Accepted</Text>
+          </View>
+          
+          <View style={styles.rideHeader}>
+            <Image
+              source={{ 
+                uri: ride.driver_avatar_url || 
+                    'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=200&auto=format&fit=crop&q=80' 
+              }}
+              style={styles.driverImage}
+            />
+            <View>
+              <Text style={styles.driverName}>{ride.driver_full_name || 'Driver'}</Text>
+              <Text style={styles.carInfo}>{ride.vehicle_name || 'Vehicle'}</Text>
+            </View>
+            <Text style={styles.price}>${ride.price}</Text>
+          </View>
+
+          <View style={styles.rideDetails}>
+            <View style={styles.locationRow}>
+              <MapPin size={16} color="#3B82F6" />
+              <Text style={styles.location}>{ride.pickup_location}</Text>
+            </View>
+            <View style={styles.locationRow}>
+              <MapPin size={16} color="#3B82F6" />
+              <Text style={styles.location}>{ride.dropoff_location}</Text>
+            </View>
+          </View>
+
+          <View style={styles.rideFooter}>
+            <View style={styles.footerItem}>
+              <Clock size={16} color="#64748B" />
+              <Text style={styles.footerText}>
+                {new Date(ride.departure_time).toLocaleTimeString([], {
+                  hour: '2-digit',
+                  minute: '2-digit',
+                })}
+              </Text>
+            </View>
+            <View style={styles.footerItem}>
+              <Users size={16} color="#64748B" />
+              <Text style={styles.footerText}>
+                {request.seats_requested} seats booked
+              </Text>
+            </View>
+          </View>
+        </TouchableOpacity>
+      );
+    })}
+  </>
+)}
         {error ? (
           <View style={styles.errorContainer}>
             <Text style={styles.errorText}>{error}</Text>
@@ -238,6 +361,34 @@ export default function HomeScreen() {
 }
 
 const styles = StyleSheet.create({
+  // ...existing styles
+
+  acceptedRideCard: {
+    borderColor: '#3B82F6',
+    borderWidth: 2,
+    backgroundColor: '#F0F9FF',
+    position: 'relative',
+    marginBottom: 24,
+  },
+  acceptedBadge: {
+    position: 'absolute',
+    top: -12,
+    right: 16,
+    backgroundColor: '#22C55E',
+    borderRadius: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 4,
+    paddingHorizontal: 12,
+  },
+  acceptedBadgeText: {
+    color: '#fff',
+    fontSize: 12,
+    fontFamily: 'Inter-SemiBold',
+    marginLeft: 4,
+  },
+  
+  // Include all existing styles below...
   container: {
     flex: 1,
     backgroundColor: '#fff',

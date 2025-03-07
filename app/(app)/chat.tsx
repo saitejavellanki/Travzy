@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Alert, ActivityIndicator, RefreshControl } from 'react-native';
 import { supabase } from '@/lib/supabase';
-import { CheckCircle, XCircle, MapPin, Clock, Users } from 'lucide-react-native';
+import { CheckCircle, XCircle, MapPin, Clock, Users, Phone } from 'lucide-react-native';
 import { router } from 'expo-router';
 
 export default function RideRequestsScreen() {
@@ -89,7 +89,7 @@ const fetchDriverRideRequests = async (driverId) => {
         // Fetch profiles for these passengers
         const { data: passengerProfiles, error: profilesError } = await supabase
           .from('profiles')
-          .select('user_id, full_name, avatar_url')
+          .select('user_id, full_name, avatar_url,phone_no')
           .in('user_id', passengerIds);
         
         if (profilesError) {
@@ -170,9 +170,9 @@ const fetchDriverRideRequests = async (driverId) => {
       
       // Update the ride request status
       const { error: updateRequestError } = await supabase
-        .from('ride_requests')
-        .update({ status: 'accepted' })
-        .eq('id', requestId);
+       .from('ride_requests')
+       .update({ status: 'Accepted' }) // or another allowed value from your schema
+       .eq('id', requestId);
       
       if (updateRequestError) throw updateRequestError;
       
@@ -308,6 +308,15 @@ const fetchDriverRideRequests = async (driverId) => {
                   <View style={styles.infoItem}>
                     <Users size={16} color="#64748B" />
                     <Text style={styles.infoText}>{request.seats_requested} seat(s) requested</Text>
+                  </View>
+                </View>
+
+                <View style={styles.infoRow}>
+                  <View style={styles.infoItem}>
+                    <Phone size={16} color="#64748B" />
+                      <Text style={styles.infoText}>
+                        {request.profiles?.phone_no || 'No phone number'}
+                      </Text>
                   </View>
                 </View>
                 
