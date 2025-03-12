@@ -1,5 +1,5 @@
 import { Tabs } from 'expo-router';
-import { Chrome as Home, Car, MessageSquare, User } from 'lucide-react-native';
+import { HomeIcon as Home, Car, MessageSquare, User } from 'lucide-react-native';
 
 export default function AppLayout() {
   return (

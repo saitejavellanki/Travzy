@@ -29,7 +29,8 @@ export default function RootLayout() {
     <>
       <Stack screenOptions={{ headerShown: false }}>
         <Stack.Screen name="(auth)" options={{ headerShown: false }} />
-        <Stack.Screen name="(app)" options={{ headerShown: false }} />
+        <Stack.Screen name="(p2p)" options={{ headerShown: false }} />
+        <Stack.Screen name="(auto)" options={{headerShown: false}} />
       </Stack>
       <StatusBar style="dark" />
     </>
