@@ -1,9 +1,15 @@
-
+// app/mode_selection.tsx
 import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
 import { useRouter } from 'expo-router';
-
+import { useMode } from './components/mode/ModeContext';
 export default function ModeSelectionScreen() {
   const router = useRouter();
+  const { setCurrentMode } = useMode();
+
+  const handleSelectMode = (mode: 'p2p' | 'auto') => {
+    setCurrentMode(mode);
+    router.replace(`/(${mode})`);
+  };
 
   return (
     <View style={styles.container}>
@@ -11,7 +17,7 @@ export default function ModeSelectionScreen() {
       
       <TouchableOpacity 
         style={styles.modeButton} 
-        onPress={() => router.replace('/(p2p)')}
+        onPress={() => handleSelectMode('p2p')}
       >
         <Text style={styles.buttonText}>P2P</Text>
         <Text style={styles.description}>Connect with drivers directly</Text>
@@ -19,7 +25,7 @@ export default function ModeSelectionScreen() {
       
       <TouchableOpacity 
         style={styles.modeButton}
-        onPress={() => router.replace('/(auto)')}
+        onPress={() => handleSelectMode('auto')}
       >
         <Text style={styles.buttonText}>Auto Booking</Text>
         <Text style={styles.description}>Book auto rickshaws on demand</Text>
