@@ -86,14 +86,6 @@ export default function ProfileScreen() {
     );
   }
 
-  if (error) {
-    return (
-      <View style={styles.errorContainer}>
-        <Text style={styles.errorText}>{error}</Text>
-      </View>
-    );
-  }
-
   const renderMenuItem = (icon, title, rightComponent = <ChevronRight size={20} color="#64748B" />) => (
     <TouchableOpacity style={styles.menuItem}>
       <View style={styles.menuItemLeft}>
@@ -110,47 +102,60 @@ export default function ProfileScreen() {
         <Text style={styles.headerTitle}>Profile</Text>
       </View>
       
-      <View style={styles.profileCard}>
-        <Image 
-          source={{ uri: profile?.avatar_url || 'https://i.pravatar.cc/300' }} 
-          style={styles.profileImage} 
-        />
-        <View style={styles.profileInfo}>
-          <Text style={styles.profileName}>{profile?.full_name || 'User'}</Text>
-          <Text style={styles.profilePhone}>User since {profile?.created_at ? new Date(profile.created_at).toLocaleDateString() : 'recently'}</Text>
+      {error ? (
+        <View style={styles.centeredErrorContainer}>
+          <Text style={styles.errorText}>{error}</Text>
+          <TouchableOpacity 
+            style={styles.actionButton}
+            onPress={() => router.replace('/login')}
+          >
+            <Text style={styles.actionButtonText}>Log In</Text>
+          </TouchableOpacity>
         </View>
-        <TouchableOpacity style={styles.editButton}>
-          <Text style={styles.editButtonText}>Edit</Text>
-        </TouchableOpacity>
-      </View>
-      
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>Account</Text>
-        {renderMenuItem(<Heart size={20} color="#3B82F6" style={styles.menuIcon} />, 'Saved Locations')}
-        {renderMenuItem(<CreditCard size={20} color="#3B82F6" style={styles.menuIcon} />, 'Payment Methods')}
-        {renderMenuItem(<Bell size={20} color="#3B82F6" style={styles.menuIcon} />, 'Notifications')}
-      </View>
-      
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>Preferences</Text>
-        {renderMenuItem(<Settings size={20} color="#3B82F6" style={styles.menuIcon} />, 'App Settings')}
-        {renderMenuItem(
-          <HelpCircle size={20} color="#3B82F6" style={styles.menuIcon} />, 
-          'Help & Support'
-        )}
-      </View>
-      
-      <TouchableOpacity 
-        style={styles.logoutButton} 
-        onPress={handleLogout}
-      >
-        <LogOut size={20} color="#EF4444" />
-        <Text style={styles.logoutText}>Logout</Text>
-      </TouchableOpacity>
-      
-      <View style={styles.footer}>
-        <Text style={styles.versionText}>Version 1.0.0</Text>
-      </View>
+      ) : (
+        <>
+          <View style={styles.profileCard}>
+            <Image
+              source={{ uri: profile?.avatar_url || 'https://i.pravatar.cc/300' }}
+              style={styles.profileImage} />
+            <View style={styles.profileInfo}>
+              <Text style={styles.profileName}>{profile?.full_name || 'User'}</Text>
+              <Text style={styles.profilePhone}>User since {profile?.created_at ? new Date(profile.created_at).toLocaleDateString() : 'recently'}</Text>
+            </View>
+            <TouchableOpacity style={styles.editButton}>
+              <Text style={styles.editButtonText}>Edit</Text>
+            </TouchableOpacity>
+          </View>
+          
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>Account</Text>
+            {renderMenuItem(<Heart size={20} color="#3B82F6" style={styles.menuIcon} />, 'Saved Locations')}
+            {renderMenuItem(<CreditCard size={20} color="#3B82F6" style={styles.menuIcon} />, 'Payment Methods')}
+            {renderMenuItem(<Bell size={20} color="#3B82F6" style={styles.menuIcon} />, 'Notifications')}
+          </View>
+          
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>Preferences</Text>
+            {renderMenuItem(<Settings size={20} color="#3B82F6" style={styles.menuIcon} />, 'App Settings')}
+            {renderMenuItem(
+              <HelpCircle size={20} color="#3B82F6" style={styles.menuIcon} />,
+              'Help & Support'
+            )}
+          </View>
+          
+          <TouchableOpacity
+            style={styles.logoutButton}
+            onPress={handleLogout}
+          >
+            <LogOut size={20} color="#EF4444" />
+            <Text style={styles.logoutText}>Logout</Text>
+          </TouchableOpacity>
+          
+          <View style={styles.footer}>
+            <Text style={styles.versionText}>Version 1.0.0</Text>
+          </View>
+        </>
+      )}
     </ScrollView>
   );
 }
@@ -173,11 +178,20 @@ const styles = StyleSheet.create({
     padding: 20,
     backgroundColor: '#F8FAFC',
   },
+  centeredErrorContainer: {
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+    backgroundColor: '#F8FAFC',
+    height: 500,
+    marginTop: 50,
+  },
   errorText: {
     fontSize: 16,
     color: '#EF4444',
     textAlign: 'center',
     fontFamily: 'Inter-Regular',
+    marginBottom: 20,
   },
   header: {
     backgroundColor: '#fff',
@@ -191,6 +205,21 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     color: '#0F172A',
     fontFamily: 'Inter-Bold',
+  },
+  actionButton: {
+    paddingVertical: 12,
+    paddingHorizontal: 24,
+    backgroundColor: '#683367',
+    borderRadius: 16,
+    justifyContent: 'center',
+    alignItems: 'center',
+    // marginTop: 16,
+    width: 140,
+  },
+  actionButtonText: {
+    color: '#fff',
+    fontSize: 16,
+    fontFamily: 'Inter-SemiBold',
   },
   profileCard: {
     flexDirection: 'row',

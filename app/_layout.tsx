@@ -27,7 +27,7 @@ export default function RootLayout() {
 
   return (
     <>
-      <Stack screenOptions={{ headerShown: false }}>
+      <Stack screenOptions={{ headerShown: false }} initialRouteName="(auth)">
         <Stack.Screen name="(auth)" options={{ headerShown: false }} />
         <Stack.Screen name="(p2p)" options={{ headerShown: false }} />
         <Stack.Screen name="(auto)" options={{headerShown: false}} />

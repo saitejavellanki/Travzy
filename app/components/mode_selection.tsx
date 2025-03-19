@@ -1,4 +1,3 @@
-// Create a new file: mode-selection.tsx in your app folder
 
 import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
 import { useRouter } from 'expo-router';

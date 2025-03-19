@@ -19,7 +19,7 @@ export default function LoginScreen() {
         if (user) {
           // User is already logged in, redirect to home
           console.log("User already logged in:", user);
-          router.replace('/(tabs)'); // Navigate to your app's main screen
+          router.replace('/components/mode_selection'); // Navigate to mode selection.
         }
       } catch (err) {
         console.error("Error checking current user:", err);
@@ -59,7 +59,7 @@ export default function LoginScreen() {
           text: "Continue", 
           onPress: () => {
             // Navigate to the main app screen
-            router.replace('/mode_selection'); // or your main screen path
+            router.replace('/components/mode_selection'); // or your main screen path
           }
         }]
       );
