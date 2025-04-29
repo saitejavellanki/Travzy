@@ -6,13 +6,34 @@
   "build": {
     "development": {
       "developmentClient": true,
-      "distribution": "internal"
+      "distribution": "internal",
+      "android": {
+        "buildType": "apk",
+        "gradleCommand": ":app:assembleDebug"
+      },
+      "env": {
+        "GRADLE_PROPERTIES": "org.gradle.jvmargs=-Xmx2048m -XX:MaxMetaspaceSize=512m\nandroid.useAndroidX=true\nandroid.enableJetifier=true\nkotlin.version=1.9.25\nkotlinVersion=1.9.25\norg.jetbrains.kotlin.version=1.9.25\ncomposeCompilerVersion=1.5.15\nandroidx.compose.compiler.suppressKotlinVersionCompatibilityCheck=true"
+      }
     },
     "preview": {
-      "distribution": "internal"
+      "distribution": "internal",
+      "android": {
+        "buildType": "apk",
+        "gradleCommand": ":app:assembleRelease"
+      },
+      "env": {
+        "GRADLE_PROPERTIES": "org.gradle.jvmargs=-Xmx2048m -XX:MaxMetaspaceSize=512m\nandroid.useAndroidX=true\nandroid.enableJetifier=true\nkotlin.version=1.9.25\nkotlinVersion=1.9.25\norg.jetbrains.kotlin.version=1.9.25\ncomposeCompilerVersion=1.5.15\nandroidx.compose.compiler.suppressKotlinVersionCompatibilityCheck=true"
+      }
     },
     "production": {
-      "autoIncrement": true
+      "autoIncrement": true,
+      "android": {
+        "buildType": "apk",
+        "gradleCommand": ":app:assembleRelease"
+      },
+      "env": {
+        "GRADLE_PROPERTIES": "org.gradle.jvmargs=-Xmx2048m -XX:MaxMetaspaceSize=512m\nandroid.useAndroidX=true\nandroid.enableJetifier=true\nkotlin.version=1.9.25\nkotlinVersion=1.9.25\norg.jetbrains.kotlin.version=1.9.25\ncomposeCompilerVersion=1.5.15\nandroidx.compose.compiler.suppressKotlinVersionCompatibilityCheck=true"
+      }
     }
   },
   "submit": {

@@ -19,7 +19,7 @@ export default function LoginScreen() {
         if (user) {
           // User is already logged in, redirect to home
           console.log("User already logged in:", user);
-          router.replace('/(tabs)'); // Navigate to your app's main screen
+          router.replace('/mode_selection'); // Navigate to mode selection.
         }
       } catch (err) {
         console.error("Error checking current user:", err);
@@ -54,12 +54,12 @@ export default function LoginScreen() {
       // If we get here, sign in was successful
       Alert.alert(
         "Login Successful",
-        "Welcome back to CampusRide!",
+        "Welcome back to TravZy!",
         [{ 
           text: "Continue", 
           onPress: () => {
             // Navigate to the main app screen
-            router.replace('/(app)'); // or your main screen path
+            router.replace('/mode_selection'); // or your main screen path
           }
         }]
       );
@@ -79,8 +79,8 @@ export default function LoginScreen() {
           style={styles.headerImage}
         />
         <View style={styles.overlay} />
-        <Text style={styles.title}>CampusRide</Text>
-        <Text style={styles.subtitle}>Safe rides for students</Text>
+        <Text style={styles.title}>TravZy</Text>
+        <Text style={styles.subtitle}>Travel with Ease!!</Text>
       </View>
 
       <View style={styles.form}>

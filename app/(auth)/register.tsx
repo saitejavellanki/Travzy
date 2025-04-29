@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { View, Text, TextInput, TouchableOpacity, StyleSheet, Image, ActivityIndicator, Alert } from 'react-native';
+import { View, Text, TextInput, TouchableOpacity, StyleSheet, Image, ActivityIndicator, Alert,ScrollView } from 'react-native';
 import { Link, router } from 'expo-router';
 import { UserPlus } from 'lucide-react-native';
 import { signUp } from '@/lib/auth';
@@ -78,8 +78,9 @@ export default function RegisterScreen() {
   };
 
   return (
+     <ScrollView contentContainerStyle={{ flexGrow: 1 }}>
     <View style={styles.container}>
-      <View style={styles.header}>
+        <View style={styles.header}>
         <Image
           source={{ uri: 'https://images.unsplash.com/photo-1469854523086-cc02fe5d8800?w=800&auto=format&fit=crop&q=80' }}
           style={styles.headerImage}
@@ -91,7 +92,7 @@ export default function RegisterScreen() {
         >
           <Text style={styles.backButtonText}>← Back</Text>
         </TouchableOpacity>
-        <Text style={styles.title}>Join CampusRide</Text>
+        <Text style={styles.title}>Join TravZy</Text>
         <Text style={styles.subtitle}>Create your account</Text>
       </View>
 
@@ -109,7 +110,6 @@ export default function RegisterScreen() {
             </Text>
           </View>
         )}
-
         <TextInput
           style={styles.input}
           placeholder="Full Name"
@@ -135,15 +135,14 @@ export default function RegisterScreen() {
           keyboardType="phone-pad"
           editable={!loading && !success}
         />
-        <TextInput
+          <TextInput
           style={styles.input}
           placeholder="Password"
           value={password}
           onChangeText={setPassword}
           secureTextEntry
           editable={!loading && !success}
-        />
-
+         />
         <TouchableOpacity 
           style={[
             styles.button, 
@@ -175,6 +174,7 @@ export default function RegisterScreen() {
         </Link>
       </View>
     </View>
+    </ScrollView>
   );
 }
 

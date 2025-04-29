@@ -1,8 +1,10 @@
+// app/_layout.tsx
 import { useEffect } from 'react';
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useFonts, Inter_400Regular, Inter_500Medium, Inter_600SemiBold, Inter_700Bold } from '@expo-google-fonts/inter';
 import { SplashScreen } from 'expo-router';
+import { ModeProvider } from './components/mode/ModeContext';
 
 // Prevent splash screen from auto-hiding
 SplashScreen.preventAutoHideAsync();
@@ -26,12 +28,14 @@ export default function RootLayout() {
   }
 
   return (
-    <>
-      <Stack screenOptions={{ headerShown: false }}>
+    <ModeProvider>
+      <Stack screenOptions={{ headerShown: false }} initialRouteName="(auth)">
         <Stack.Screen name="(auth)" options={{ headerShown: false }} />
-        <Stack.Screen name="(app)" options={{ headerShown: false }} />
+        <Stack.Screen name="(p2p)" options={{ headerShown: false }} />
+        <Stack.Screen name="(auto)" options={{ headerShown: false }} />
+        <Stack.Screen name="mode_selection" options={{ headerShown: false }} />
       </Stack>
       <StatusBar style="dark" />
-    </>
+    </ModeProvider>
   );
 }
