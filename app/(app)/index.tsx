@@ -1,10 +1,38 @@
 import { useState, useEffect } from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Image, ActivityIndicator, RefreshControl, TextInput } from 'react-native';
-import { Search, MapPin, Clock, Users, Check } from 'lucide-react-native';
-import { supabase } from '@/lib/supabase';
+import { Search, MapPin, Clock, Users, Check, Phone } from 'lucide-react-native';
 import { router } from 'expo-router';
+import { 
+  getAuth, 
+  onAuthStateChanged 
+} from 'firebase/auth';
+import { 
+  getFirestore, 
+  collection, 
+  query, 
+  where, 
+  getDocs, 
+  orderBy, 
+  limit 
+} from 'firebase/firestore';
+import { initializeApp } from 'firebase/app';
 
-// ... existing type definitions
+// Your Firebase configuration
+const firebaseConfig = {
+  apiKey: "AIzaSyBB9UxfdXt5_DqM_o-EQGZDF3lDrSmfTYw",
+  authDomain: "travzyy.firebaseapp.com",
+  databaseURL: "https://travzyy-default-rtdb.firebaseio.com",
+  projectId: "travzyy",
+  storageBucket: "travzyy.firebasestorage.app",
+  messagingSenderId: "399356874562",
+  appId: "1:399356874562:web:2b447680e0c96365b9c2db",
+  measurementId: "G-CM9H23P9D7"
+};
+
+// Initialize Firebase
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getFirestore(app);
 
 export default function HomeScreen() {
   const [rides, setRides] = useState([]);
@@ -18,84 +46,196 @@ export default function HomeScreen() {
 
   // Fetch current user
   const fetchCurrentUser = async () => {
-    try {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (user) {
-        setCurrentUserId(user.id);
-        return user.id;
-      }
-      return null;
-    } catch (err) {
+    return new Promise((resolve) => {
+      const unsubscribe = onAuthStateChanged(auth, (user) => {
+        unsubscribe(); // Stop listening immediately after the first response
+        if (user) {
+          setCurrentUserId(user.uid);
+          resolve(user.uid);
+        } else {
+          resolve(null);
+        }
+      });
+    }).catch(err => {
       console.error('Error fetching current user:', err);
       return null;
-    }
+    });
   };
 
   // Fetch user's ride requests
-  // Updated fetchUserRideRequests function
-const fetchUserRideRequests = async (userId) => {
-  if (!userId) return;
-  
-  try {
-    // First fetch the ride requests
-    const { data: requestsData, error: requestsError } = await supabase
-      .from('ride_requests')
-      .select('id, status, seats_requested, ride_id')
-      .eq('passenger_id', userId);
-      
-    if (requestsError) throw requestsError;
+  const fetchUserRideRequests = async (userId) => {
+    if (!userId) return;
     
-    if (!requestsData || requestsData.length === 0) {
-      setUserRideRequests([]);
-      return;
+    try {
+      // First fetch the ride requests
+      const requestsRef = collection(db, 'ride_requests');
+      const requestsQuery = query(
+        requestsRef,
+        where('passenger_id', '==', userId)
+      );
+      
+      const requestsSnapshot = await getDocs(requestsQuery);
+      
+      if (requestsSnapshot.empty) {
+        setUserRideRequests([]);
+        return;
+      }
+      
+      const requestsData = requestsSnapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      }));
+      
+      // Get all ride IDs from the requests
+      const rideIds = requestsData.map(request => request.ride_id);
+      
+      if (rideIds.length === 0) {
+        setUserRideRequests([]);
+        return;
+      }
+      
+      // Get the rides - Firebase doesn't support direct 'in' queries with arrays that are too large
+      // so we'll fetch each ride individually and combine them
+      const ridesPromises = rideIds.map(rideId => {
+        const rideRef = collection(db, 'rides');
+        const rideQuery = query(rideRef, where('id', '==', rideId));
+        return getDocs(rideQuery);
+      });
+      
+      const ridesResults = await Promise.all(ridesPromises);
+      
+      // Extract rides data from results
+      let ridesData = [];
+      ridesResults.forEach(snapshot => {
+        if (!snapshot.empty) {
+          snapshot.docs.forEach(doc => {
+            ridesData.push({ id: doc.id, ...doc.data() });
+          });
+        }
+      });
+      
+      // Get all driver IDs
+      const driverIds = ridesData
+        .map(ride => ride.driver_id)
+        .filter(Boolean);
+      
+      // Get the driver profiles - same approach as rides
+      const profilesPromises = driverIds.map(driverId => {
+        const profileRef = collection(db, 'profiles');
+        const profileQuery = query(profileRef, where('user_id', '==', driverId));
+        return getDocs(profileQuery);
+      });
+      
+      const profilesResults = await Promise.all(profilesPromises);
+      
+      // Extract profile data
+      let driverProfiles = [];
+      profilesResults.forEach(snapshot => {
+        if (!snapshot.empty) {
+          snapshot.docs.forEach(doc => {
+            driverProfiles.push({ id: doc.id, ...doc.data() });
+          });
+        }
+      });
+      
+      // Combine the data
+      const combinedData = requestsData.map(request => {
+        const relatedRide = ridesData.find(ride => ride.id === request.ride_id);
+        
+        if (!relatedRide) return request; // No matching ride found
+        
+        const driverProfile = driverProfiles.find(
+          profile => profile.user_id === relatedRide.driver_id
+        );
+        
+        // Format the ride data to match expected structure
+        return {
+          ...request,
+          ride: {
+            ride_id: relatedRide.id,
+            pickup_location: relatedRide.pickup_location,
+            dropoff_location: relatedRide.dropoff_location,
+            price: relatedRide.price,
+            departure_time: relatedRide.departure_time,
+            available_seats: relatedRide.available_seats,
+            vehicle_name: relatedRide.vehicle_name,
+            status: relatedRide.status,
+            driver_id: relatedRide.driver_id,
+            driver_name: driverProfile?.full_name || 'Unknown Driver',
+            driver_phone: driverProfile?.phone_no || 'N/A',
+            driver_avatar: driverProfile?.avatar_url || ''
+          }
+        };
+      });
+      
+      console.log('User ride requests with ride data:', combinedData);
+      setUserRideRequests(combinedData);
+    } catch (err) {
+      console.error('Error fetching user ride requests:', err);
     }
-    
-    // Get all ride IDs from the requests
-    const rideIds = requestsData.map(request => request.ride_id);
-    
-    // Fetch the rides information
-    const { data: ridesData, error: ridesError } = await supabase
-      .from('rides')
-      .select('*')
-      .in('id', rideIds);
-      
-    if (ridesError) throw ridesError;
-    
-    // Combine the data
-    const combinedData = requestsData.map(request => {
-      const relatedRide = ridesData.find(ride => ride.id === request.ride_id);
-      return {
-        ...request,
-        ride: relatedRide || null
-      };
-    });
-    
-    console.log('User ride requests with ride data:', combinedData);
-    setUserRideRequests(combinedData);
-  } catch (err) {
-    console.error('Error fetching user ride requests:', err);
-  }
-};
+  };
 
   const fetchRides = async () => {
     try {
       console.log('Fetching rides...');
       
-      const { data, error } = await supabase
-        .from('rides')
-        .select('*')
-        .eq('status', 'active')
-        .order('departure_time', { ascending: true });
-
-      if (error) {
-        console.error('Supabase query error:', error);
-        throw error;
+      // Step 1: Get active rides
+      const ridesRef = collection(db, 'rides');
+      const ridesQuery = query(
+        ridesRef,
+        where('status', '==', 'active'),
+        orderBy('departure_time'),
+        limit(10)
+      );
+  
+      const ridesSnapshot = await getDocs(ridesQuery);
+      
+      if (ridesSnapshot.empty) {
+        console.log('No active rides found');
+        setRides([]);
+        setFilteredRides([]);
+        setLoading(false);
+        setRefreshing(false);
+        return;
       }
       
-      console.log('Fetched rides:', data?.length || 0);
+      const ridesData = ridesSnapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      }));
       
-      if (data && data.length > 0) {
-        const formattedRides = data.map((ride) => ({
+      console.log('Fetched rides:', ridesData.length);
+      
+      // Get all driver IDs from rides
+      const driverIds = ridesData.map(ride => ride.driver_id);
+      
+      // Step 2: Get driver info from profiles collection
+      // Firebase doesn't support direct 'in' queries with arrays that are too large
+      // so we'll fetch each profile individually
+      const profilesPromises = driverIds.map(driverId => {
+        const profileRef = collection(db, 'profiles');
+        const profileQuery = query(profileRef, where('user_id', '==', driverId));
+        return getDocs(profileQuery);
+      });
+      
+      const profilesResults = await Promise.all(profilesPromises);
+      
+      // Extract profile data
+      let profiles = [];
+      profilesResults.forEach(snapshot => {
+        if (!snapshot.empty) {
+          snapshot.docs.forEach(doc => {
+            profiles.push({ id: doc.id, ...doc.data() });
+          });
+        }
+      });
+      
+      // Step 3: Format the data by combining rides with driver profiles
+      const formattedRides = ridesData.map(ride => {
+        // Find matching driver profile
+        const driverProfile = profiles.find(profile => profile.user_id === ride.driver_id);
+        
+        return {
           id: ride.id,
           pickup_location: ride.pickup_location,
           dropoff_location: ride.dropoff_location,
@@ -105,18 +245,16 @@ const fetchUserRideRequests = async (userId) => {
           vehicle_name: ride.vehicle_name || 'Unknown Vehicle',
           driver: {
             id: ride.driver_id || 'unknown',
-            full_name: ride.driver_full_name || 'Unknown Driver',
-            avatar_url: ride.driver_avatar_url || ''
+            full_name: driverProfile?.full_name || 'Unknown Driver',
+            phone_no: driverProfile?.phone_no || 'N/A',
+            avatar_url: driverProfile?.avatar_url || ''
           }
-        }));
-        
-        setRides(formattedRides);
-        setFilteredRides(formattedRides); // Initially show all rides
-      } else {
-        setRides([]);
-        setFilteredRides([]);
-        console.log('No active rides found');
-      }
+        };
+      });
+      
+      setRides(formattedRides);
+      setFilteredRides(formattedRides);
+      
     } catch (err) {
       console.error('Error in fetchRides:', err);
       setError(err instanceof Error ? err.message : 'Failed to load rides');
@@ -202,75 +340,79 @@ const fetchUserRideRequests = async (userId) => {
         }
       >
         {/* Accepted Rides Section */}
-       {/* Accepted Rides Section */}
-{acceptedRideRequests.length > 0 && (
-  <>
-    <Text style={styles.sectionTitle}>Your Accepted Rides</Text>
-    {acceptedRideRequests.map((request) => {
-      const ride = request.ride;
-      
-      // Skip if we don't have ride data
-      if (!ride) return null;
-      
-      return (
-        <TouchableOpacity 
-          key={request.id} 
-          style={[styles.rideCard, styles.acceptedRideCard]}
-          onPress={() => router.push(`./components/ride/${ride.id}`)}
-        >
-          <View style={styles.acceptedBadge}>
-            <Check size={16} color="#fff" />
-            <Text style={styles.acceptedBadgeText}>Accepted</Text>
-          </View>
-          
-          <View style={styles.rideHeader}>
-            <Image
-              source={{ 
-                uri: ride.driver_avatar_url || 
-                    'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=200&auto=format&fit=crop&q=80' 
-              }}
-              style={styles.driverImage}
-            />
-            <View>
-              <Text style={styles.driverName}>{ride.driver_full_name || 'Driver'}</Text>
-              <Text style={styles.carInfo}>{ride.vehicle_name || 'Vehicle'}</Text>
-            </View>
-            <Text style={styles.price}>${ride.price}</Text>
-          </View>
+        {acceptedRideRequests.length > 0 && (
+          <>
+            <Text style={styles.sectionTitle}>Your Accepted Rides</Text>
+            {acceptedRideRequests.map((request) => {
+              const ride = request.ride;
+              
+              // Skip if we don't have ride data
+              if (!ride) return null;
+              
+              return (
+                <TouchableOpacity 
+                  key={request.id} 
+                  style={[styles.rideCard, styles.acceptedRideCard]}
+                  onPress={() => router.push(`./components/ride/${ride.ride_id}`)}
+                >
+                  <View style={styles.acceptedBadge}>
+                    <Check size={16} color="#fff" />
+                    <Text style={styles.acceptedBadgeText}>Accepted</Text>
+                  </View>
+                  
+                  <View style={styles.rideHeader}>
+                    <Image
+                      source={{ uri: ride.driver_avatar || 
+                          'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=200&auto=format&fit=crop&q=80' 
+                      }}
+                      style={styles.driverImage}
+                    />
+                    <View>
+                      <Text style={styles.driverName}>{ride.driver_name || 'Unknown Driver'}</Text>
+                      <Text style={styles.carInfo}>{ride.vehicle_name || 'Vehicle'}</Text>
+                    </View>
+                    <Text style={styles.price}>${ride.price}</Text>
+                  </View>
 
-          <View style={styles.rideDetails}>
-            <View style={styles.locationRow}>
-              <MapPin size={16} color="#3B82F6" />
-              <Text style={styles.location}>{ride.pickup_location}</Text>
-            </View>
-            <View style={styles.locationRow}>
-              <MapPin size={16} color="#3B82F6" />
-              <Text style={styles.location}>{ride.dropoff_location}</Text>
-            </View>
-          </View>
+                  <View style={styles.driverContact}>
+                    <Phone size={16} color="#64748B" />
+                    <Text style={styles.phoneNumber}>{ride.driver_phone || 'N/A'}</Text>
+                  </View>
 
-          <View style={styles.rideFooter}>
-            <View style={styles.footerItem}>
-              <Clock size={16} color="#64748B" />
-              <Text style={styles.footerText}>
-                {new Date(ride.departure_time).toLocaleTimeString([], {
-                  hour: '2-digit',
-                  minute: '2-digit',
-                })}
-              </Text>
-            </View>
-            <View style={styles.footerItem}>
-              <Users size={16} color="#64748B" />
-              <Text style={styles.footerText}>
-                {request.seats_requested} seats booked
-              </Text>
-            </View>
-          </View>
-        </TouchableOpacity>
-      );
-    })}
-  </>
-)}
+                  <View style={styles.rideDetails}>
+                    <View style={styles.locationRow}>
+                      <MapPin size={16} color="#3B82F6" />
+                      <Text style={styles.location}>{ride.pickup_location}</Text>
+                    </View>
+                    <View style={styles.locationRow}>
+                      <MapPin size={16} color="#3B82F6" />
+                      <Text style={styles.location}>{ride.dropoff_location}</Text>
+                    </View>
+                  </View>
+
+                  <View style={styles.rideFooter}>
+                    <View style={styles.footerItem}>
+                      <Clock size={16} color="#64748B" />
+                      <Text style={styles.footerText}>
+                        {new Date(ride.departure_time).toLocaleTimeString([], {
+                          hour: '2-digit',
+                          minute: '2-digit',
+                        })}
+                      </Text>
+                    </View>
+                    <View style={styles.footerItem}>
+                      <Users size={16} color="#64748B" />
+                      <Text style={styles.footerText}>
+                        {request.seats_requested} seats booked
+                      </Text>
+                    </View>
+                  </View>
+                </TouchableOpacity>
+              );
+            })}
+          </>
+        )}
+
         {error ? (
           <View style={styles.errorContainer}>
             <Text style={styles.errorText}>{error}</Text>
@@ -302,9 +444,8 @@ const fetchUserRideRequests = async (userId) => {
                 >
                   <View style={styles.rideHeader}>
                     <Image
-                      source={{ 
-                        uri: ride.driver.avatar_url || 
-                            'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=200&auto=format&fit=crop&q=80' 
+                      source={{ uri: ride.driver.avatar_url || 
+                          'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=200&auto=format&fit=crop&q=80' 
                       }}
                       style={styles.driverImage}
                     />
@@ -313,6 +454,11 @@ const fetchUserRideRequests = async (userId) => {
                       <Text style={styles.carInfo}>{ride.vehicle_name}</Text>
                     </View>
                     <Text style={styles.price}>${ride.price}</Text>
+                  </View>
+
+                  <View style={styles.driverContact}>
+                    <Phone size={16} color="#64748B" />
+                    <Text style={styles.phoneNumber}>{ride.driver.phone_no}</Text>
                   </View>
 
                   <View style={styles.rideDetails}>
@@ -361,34 +507,6 @@ const fetchUserRideRequests = async (userId) => {
 }
 
 const styles = StyleSheet.create({
-  // ...existing styles
-
-  acceptedRideCard: {
-    borderColor: '#3B82F6',
-    borderWidth: 2,
-    backgroundColor: '#F0F9FF',
-    position: 'relative',
-    marginBottom: 24,
-  },
-  acceptedBadge: {
-    position: 'absolute',
-    top: -12,
-    right: 16,
-    backgroundColor: '#22C55E',
-    borderRadius: 12,
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 4,
-    paddingHorizontal: 12,
-  },
-  acceptedBadgeText: {
-    color: '#fff',
-    fontSize: 12,
-    fontFamily: 'Inter-SemiBold',
-    marginLeft: 4,
-  },
-  
-  // Include all existing styles below...
   container: {
     flex: 1,
     backgroundColor: '#fff',
@@ -498,7 +616,7 @@ const styles = StyleSheet.create({
   rideHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 16,
+    marginBottom: 12,
   },
   driverImage: {
     width: 40,
@@ -522,6 +640,20 @@ const styles = StyleSheet.create({
     color: '#3B82F6',
     fontFamily: 'Inter-Bold',
   },
+  
+  // New style for driver contact info
+  driverContact: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  phoneNumber: {
+    marginLeft: 8,
+    fontSize: 14,
+    color: '#64748B',
+    fontFamily: 'Inter-Regular',
+  },
+  
   rideDetails: {
     borderTopWidth: 1,
     borderBottomWidth: 1,
@@ -566,5 +698,29 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 16,
     fontFamily: 'Inter-SemiBold',
+  },
+  acceptedRideCard: {
+    borderColor: '#3B82F6',
+    borderWidth: 2,
+    backgroundColor: '#F0F9FF',
+    position: 'relative',
+    marginBottom: 24,
+  },
+  acceptedBadge: {
+    position: 'absolute',
+    top: -12,
+    right: 16,
+    backgroundColor: '#22C55E',
+    borderRadius: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 4,
+    paddingHorizontal: 12,
+  },
+  acceptedBadgeText: {
+    color: '#fff',
+    fontSize: 12,
+    fontFamily: 'Inter-SemiBold',
+    marginLeft: 4,
   },
 });

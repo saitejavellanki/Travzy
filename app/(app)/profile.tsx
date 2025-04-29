@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Image, Alert, ActivityIndicator } from 'react-native';
-import { User, LogOut, Settings, Heart, Car, StarIcon } from 'lucide-react-native';
+import { User, LogOut, Settings, Heart, Car, StarIcon, Camera } from 'lucide-react-native';
 import { supabase } from '@/lib/supabase';
 import { router } from 'expo-router';
+import * as ImagePicker from 'expo-image-picker';
 
 type Profile = {
   user_id: string;
@@ -15,6 +16,7 @@ export default function ProfileScreen() {
   const [profile, setProfile] = useState<Profile | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [uploadingPhoto, setUploadingPhoto] = useState(false);
 
   useEffect(() => {
     fetchProfile();
@@ -78,6 +80,101 @@ export default function ProfileScreen() {
     }
   };
 
+  const handleUpdatePhoto = async () => {
+    try {
+      // Request permission
+      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      
+      if (status !== 'granted') {
+        Alert.alert('Permission Required', 'Please allow access to your photo library.');
+        return;
+      }
+  
+      // Use simpler options to avoid processing issues
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsEditing: true,
+        aspect: [1, 1],
+        quality: 0.5, // Lower quality to reduce file size
+      });
+  
+      if (!result.canceled && result.assets && result.assets[0]) {
+        await uploadProfilePhoto(result.assets[0].uri);
+      }
+    } catch (error) {
+      console.error("Image picker error:", error);
+      Alert.alert('Error', 'Could not open image picker. Please try again.');
+    }
+  };
+
+  const uploadProfilePhoto = async (uri) => {
+    try {
+      setUploadingPhoto(true);
+      
+      // Get session
+      const { data: sessionData } = await supabase.auth.getSession();
+      const session = sessionData?.session;
+      
+      if (!session) {
+        throw new Error('Not logged in');
+      }
+      
+      // First, we need to convert the image URI to a file blob
+      const response = await fetch(uri);
+      const blob = await response.blob();
+      
+      // Create file name with proper extension
+      const fileName = `avatar-${session.user.id}-${Date.now()}.jpg`;
+      
+      // Use the correct Supabase storage upload method
+      const { data, error } = await supabase
+        .storage
+        .from('avatars')
+        .upload(fileName, blob, {
+          contentType: 'image/jpeg',
+          upsert: true  // This will overwrite if the file exists
+        });
+      
+      if (error) {
+        console.error('Supabase storage error details:', error);
+        throw error;
+      }
+      
+      if (!data || !data.path) {
+        throw new Error('Upload succeeded but no path was returned');
+      }
+      
+      // Get the public URL
+      const { data: urlData } = supabase
+        .storage
+        .from('avatars')
+        .getPublicUrl(data.path);
+      
+      const publicUrl = urlData.publicUrl;
+      
+      // Update profile with the new URL
+      const { error: updateError } = await supabase
+        .from('profiles')
+        .update({ avatar_url: publicUrl })
+        .eq('user_id', session.user.id);
+        
+      if (updateError) {
+        console.error('Profile update error:', updateError);
+        throw updateError;
+      }
+      
+      // Refresh the profile data
+      setProfile(prev => prev ? { ...prev, avatar_url: publicUrl } : null);
+      
+      Alert.alert('Success', 'Profile photo updated successfully');
+    } catch (error) {
+      console.error('Upload error:', error);
+      Alert.alert('Upload Failed', `Could not upload your photo. Error: ${error.message}`);
+    } finally {
+      setUploadingPhoto(false);
+    }
+  };
+
   if (loading) {
     return (
       <View style={styles.loadingContainer}>
@@ -103,18 +200,34 @@ export default function ProfileScreen() {
       ) : (
         <View style={styles.content}>
           <View style={styles.profileHeader}>
-            {profile?.avatar_url ? (
-              <Image
-                source={{ uri: profile.avatar_url }}
-                style={styles.avatar}
-              />
-            ) : (
-              <View style={styles.avatarPlaceholder}>
-                <Text style={styles.avatarInitial}>
-                  {profile?.full_name?.charAt(0).toUpperCase() || '?'}
-                </Text>
-              </View>
-            )}
+            <TouchableOpacity onPress={handleUpdatePhoto} disabled={uploadingPhoto}>
+              {uploadingPhoto ? (
+                <View style={styles.avatarPlaceholder}>
+                  <ActivityIndicator size="small" color="#FFFFFF" />
+                </View>
+              ) : profile?.avatar_url ? (
+                <View style={styles.avatarContainer}>
+                  <Image
+                    source={{ uri: profile.avatar_url }}
+                    style={styles.avatar}
+                  />
+                  <View style={styles.cameraIconContainer}>
+                    <Camera size={16} color="#FFFFFF" />
+                  </View>
+                </View>
+              ) : (
+                <View style={styles.avatarContainer}>
+                  <View style={styles.avatarPlaceholder}>
+                    <Text style={styles.avatarInitial}>
+                      {profile?.full_name?.charAt(0).toUpperCase() || '?'}
+                    </Text>
+                  </View>
+                  <View style={styles.cameraIconContainer}>
+                    <Camera size={16} color="#FFFFFF" />
+                  </View>
+                </View>
+              )}
+            </TouchableOpacity>
             <View>
               <Text style={styles.name}>{profile?.full_name || 'User'}</Text>
             </View>
@@ -226,11 +339,14 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginBottom: 24,
   },
+  avatarContainer: {
+    position: 'relative',
+    marginRight: 16,
+  },
   avatar: {
     width: 80,
     height: 80,
     borderRadius: 40,
-    marginRight: 16,
   },
   avatarPlaceholder: {
     width: 80,
@@ -245,6 +361,19 @@ const styles = StyleSheet.create({
     fontSize: 32,
     color: '#fff',
     fontFamily: 'Inter-Bold',
+  },
+  cameraIconContainer: {
+    position: 'absolute',
+    bottom: 0,
+    right: 12,
+    backgroundColor: '#3B82F6',
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 2,
+    borderColor: '#FFFFFF',
   },
   name: {
     fontSize: 22,
