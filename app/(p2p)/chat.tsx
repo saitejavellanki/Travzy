@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Alert, ActivityIndicator, RefreshControl } from 'react-native';
-import { supabase } from '@/lib/supabase';
+import { auth, db } from '../../firebase/Config';
+import { collection, query, where, getDocs, doc, getDoc, updateDoc, onSnapshot } from 'firebase/firestore';
 import { CheckCircle, XCircle, MapPin, Clock, Users, Phone } from 'lucide-react-native';
 import { router } from 'expo-router';
 
@@ -16,12 +17,12 @@ export default function RideRequestsScreen() {
 
   const getUserSession = async () => {
     try {
-      const { data: { session }, error } = await supabase.auth.getSession();
-      if (error) throw error;
+      // Get the current user from Firebase Auth
+      const currentUser = auth.currentUser;
       
-      if (session?.user) {
-        setUserId(session.user.id);
-        fetchDriverRideRequests(session.user.id);
+      if (currentUser) {
+        setUserId(currentUser.uid);
+        fetchDriverRideRequests(currentUser.uid);
       } else {
         setLoading(false);
         Alert.alert('Not logged in', 'Please login to view ride requests');
@@ -32,22 +33,20 @@ export default function RideRequestsScreen() {
     }
   };
 
-  // Change this function in your code
-// Updated fetchDriverRideRequests function with correct join syntax
-const fetchDriverRideRequests = async (driverId) => {
+  const fetchDriverRideRequests = async (driverId) => {
     try {
       setLoading(true);
       
       // First, get all rides that belong to this driver
-      const { data: driverRides, error: ridesError } = await supabase
-        .from('rides')
-        .select('id')
-        .eq('driver_id', driverId)
-        .eq('status', 'active');
+      const ridesQuery = query(
+        collection(db, 'rides'),
+        where('driver_id', '==', driverId),
+        where('status', '==', 'active')
+      );
       
-      if (ridesError) throw ridesError;
+      const ridesSnapshot = await getDocs(ridesQuery);
       
-      if (!driverRides || driverRides.length === 0) {
+      if (ridesSnapshot.empty) {
         setRideRequests([]);
         setLoading(false);
         setRefreshing(false);
@@ -55,66 +54,55 @@ const fetchDriverRideRequests = async (driverId) => {
       }
       
       // Get the ride IDs
+      const driverRides = [];
+      ridesSnapshot.forEach((doc) => {
+        driverRides.push({ id: doc.id, ...doc.data() });
+      });
+      
       const rideIds = driverRides.map(ride => ride.id);
       
-      // Get all ride requests for these rides with correct join syntax
-      const { data: requests, error: requestsError } = await supabase
-        .from('ride_requests')
-        .select(`
-          *,
-          rides (
-            id,
-            pickup_location,
-            dropoff_location,
-            departure_time,
-            available_seats,
-            price,
-            vehicle_name
-          )
-        `)
-        .in('ride_id', rideIds)
-        .eq('status', 'pending')
-        .order('created_at', { ascending: false });
+      // Create an array to store all requests with their details
+      let allRequests = [];
       
-      if (requestsError) {
-        console.error('Error fetching ride requests:', requestsError);
-        throw requestsError;
+      // For each ride, get the pending ride requests
+      for (const rideId of rideIds) {
+        const requestsQuery = query(
+          collection(db, 'ride_requests'),
+          where('ride_id', '==', rideId),
+          where('status', '==', 'pending')
+        );
+        
+        const requestsSnapshot = await getDocs(requestsQuery);
+        
+        if (!requestsSnapshot.empty) {
+          // For each request, get the ride details and passenger profile
+          for (const requestDoc of requestsSnapshot.docs) {
+            const requestData = { id: requestDoc.id, ...requestDoc.data() };
+            
+            // Get ride details
+            const rideDoc = await getDoc(doc(db, 'rides', requestData.ride_id));
+            const rideData = rideDoc.exists() ? rideDoc.data() : null;
+            
+            // Get passenger profile
+            const profileDoc = await getDoc(doc(db, 'profiles', requestData.passenger_id));
+            const profileData = profileDoc.exists() ? { user_id: profileDoc.id, ...profileDoc.data() } : null;
+            
+            // Combine all data
+            allRequests.push({
+              ...requestData,
+              rides: rideData,
+              profiles: profileData
+            });
+          }
+        }
       }
       
-      // If we have requests, we need to fetch the passenger profiles separately
-      if (requests && requests.length > 0) {
-        // Extract all passenger IDs
-        const passengerIds = requests.map(request => request.passenger_id);
-        
-        // Fetch profiles for these passengers
-        const { data: passengerProfiles, error: profilesError } = await supabase
-          .from('profiles')
-          .select('user_id, full_name, avatar_url,phone_no')
-          .in('user_id', passengerIds);
-        
-        if (profilesError) {
-          console.error('Error fetching passenger profiles:', profilesError);
-          throw profilesError;
-        }
-        
-        // Create a map of passenger profiles for fast lookup
-        const profilesMap = {};
-        if (passengerProfiles) {
-          passengerProfiles.forEach(profile => {
-            profilesMap[profile.user_id] = profile;
-          });
-        }
-        
-        // Attach profiles to requests
-        const requestsWithProfiles = requests.map(request => ({
-          ...request,
-          profiles: profilesMap[request.passenger_id] || null
-        }));
-        
-        setRideRequests(requestsWithProfiles);
-      } else {
-        setRideRequests([]);
-      }
+      // Sort by created_at timestamp (newest first)
+      allRequests.sort((a, b) => {
+        return new Date(b.created_at) - new Date(a.created_at);
+      });
+      
+      setRideRequests(allRequests);
     } catch (error) {
       console.error('Error fetching ride requests:', error);
       Alert.alert('Error', 'Failed to load ride requests');
@@ -123,6 +111,7 @@ const fetchDriverRideRequests = async (driverId) => {
       setRefreshing(false);
     }
   };
+
   const onRefresh = () => {
     setRefreshing(true);
     if (userId) {
@@ -154,13 +143,16 @@ const fetchDriverRideRequests = async (driverId) => {
       setLoading(true);
       
       // First check if there are enough seats available
-      const { data: rideData, error: rideError } = await supabase
-        .from('rides')
-        .select('available_seats')
-        .eq('id', rideId)
-        .single();
+      const rideRef = doc(db, 'rides', rideId);
+      const rideSnapshot = await getDoc(rideRef);
       
-      if (rideError) throw rideError;
+      if (!rideSnapshot.exists()) {
+        Alert.alert('Error', 'Ride not found');
+        setLoading(false);
+        return;
+      }
+      
+      const rideData = rideSnapshot.data();
       
       if (rideData.available_seats < seatsRequested) {
         Alert.alert('Error', 'Not enough seats available for this request');
@@ -169,21 +161,16 @@ const fetchDriverRideRequests = async (driverId) => {
       }
       
       // Update the ride request status
-      const { error: updateRequestError } = await supabase
-       .from('ride_requests')
-       .update({ status: 'Accepted' }) // or another allowed value from your schema
-       .eq('id', requestId);
-      
-      if (updateRequestError) throw updateRequestError;
+      const requestRef = doc(db, 'ride_requests', requestId);
+      await updateDoc(requestRef, {
+        status: 'accepted'
+      });
       
       // Update the available seats
       const newAvailableSeats = rideData.available_seats - seatsRequested;
-      const { error: updateRideError } = await supabase
-        .from('rides')
-        .update({ available_seats: newAvailableSeats })
-        .eq('id', rideId);
-      
-      if (updateRideError) throw updateRideError;
+      await updateDoc(rideRef, {
+        available_seats: newAvailableSeats
+      });
       
       Alert.alert('Success', 'Ride request accepted successfully');
       fetchDriverRideRequests(userId);
@@ -216,12 +203,10 @@ const fetchDriverRideRequests = async (driverId) => {
     try {
       setLoading(true);
       
-      const { error } = await supabase
-        .from('ride_requests')
-        .update({ status: 'declined' })
-        .eq('id', requestId);
-      
-      if (error) throw error;
+      const requestRef = doc(db, 'ride_requests', requestId);
+      await updateDoc(requestRef, {
+        status: 'declined'
+      });
       
       Alert.alert('Success', 'Ride request declined');
       fetchDriverRideRequests(userId);
@@ -256,7 +241,7 @@ const fetchDriverRideRequests = async (driverId) => {
             <Text style={styles.emptyText}>You have no pending ride requests</Text>
             <TouchableOpacity 
               style={styles.viewRidesButton}
-              onPress={() => router.push('./components/rides')}
+              onPress={() => router.push('/rides')}
             >
               <Text style={styles.viewRidesButtonText}>View My Rides</Text>
             </TouchableOpacity>
@@ -266,7 +251,6 @@ const fetchDriverRideRequests = async (driverId) => {
             <View key={request.id} style={styles.requestCard}>
               <View style={styles.cardHeader}>
                 <View style={styles.passengerInfo}>
-                  {/* FIXED: Changed from request.passengers to request.profiles */}
                   <View style={styles.avatarCircle}>
                     {request.profiles?.full_name ? (
                       <Text style={styles.avatarText}>

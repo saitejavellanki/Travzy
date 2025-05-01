@@ -1,19 +1,72 @@
 import { useState } from 'react';
-import { View, Text, TextInput, TouchableOpacity, StyleSheet, Image, ActivityIndicator, Alert,ScrollView } from 'react-native';
+import { View, Text, TextInput, TouchableOpacity, StyleSheet, Image, ActivityIndicator, Alert, ScrollView } from 'react-native';
 import { Link, router } from 'expo-router';
 import { UserPlus } from 'lucide-react-native';
-import { signUp } from '@/lib/auth';
+import { getAuth, createUserWithEmailAndPassword, updateProfile } from 'firebase/auth';
+import { getFirestore, doc, setDoc } from 'firebase/firestore';
+import { app } from '../../firebase/Config'; // Import the Firebase app from your config file
 
-export default function RegisterScreen() {
-  const [name, setName] = useState('');
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [phoneNumber, setPhoneNumber] = useState('');
-  const [loading, setLoading] = useState(false);
+// Initialize Firebase Auth and Firestore
+const auth = getAuth(app);
+const db = getFirestore(app);
+
+// Firebase signup function
+const signUp = async ({
+  email,
+  password,
+  fullName,
+  phoneNumber
+}: {
+  email: string;
+  password: string;
+  fullName: string;
+  phoneNumber: string;
+}) => {
+  try {
+    // Create the user account
+    const userCredential = await createUserWithEmailAndPassword(auth, email, password);
+    const user = userCredential.user;
+    
+    // Update the user's display name
+    await updateProfile(user, {
+      displayName: fullName
+    });
+    
+    // Store additional user data in Firestore
+    await setDoc(doc(db, "users", user.uid), {
+      fullName,
+      email,
+      phoneNumber,
+      createdAt: new Date().toISOString(),
+    });
+    
+    return { user };
+  } catch (error: any) {
+    console.error("Firebase sign-up error:", error);
+    
+    // Provide user-friendly error messages
+    if (error.code === 'auth/email-already-in-use') {
+      throw new Error('Email address is already in use');
+    } else if (error.code === 'auth/invalid-email') {
+      throw new Error('Invalid email address');
+    } else if (error.code === 'auth/weak-password') {
+      throw new Error('Password is too weak');
+    } else {
+      throw new Error('Registration failed. Please try again.');
+    }
+  }
+};
+
+export default function RegisterScreen(): JSX.Element {
+  const [name, setName] = useState<string>('');
+  const [email, setEmail] = useState<string>('');
+  const [password, setPassword] = useState<string>('');
+  const [phoneNumber, setPhoneNumber] = useState<string>('');
+  const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
-  const [success, setSuccess] = useState(false);
+  const [success, setSuccess] = useState<boolean>(false);
 
-  const handleSignUp = async () => {
+  const handleSignUp = async (): Promise<void> => {
     // Basic validation
     if (!name.trim()) {
       setError('Please enter your name');
@@ -47,7 +100,6 @@ export default function RegisterScreen() {
       
       console.log("Starting signup process with:", { email, name, phoneNumber });
       
-      // Pass phone number as an additional parameter to the signUp function
       const result = await signUp({
         email, 
         password, 
@@ -62,14 +114,14 @@ export default function RegisterScreen() {
         setSuccess(true);
         Alert.alert(
           "Account Created Successfully!",
-          "Please check your email for a confirmation link to verify your account.",
+          "Your account has been created. You can now sign in.",
           [{ text: "OK", onPress: () => router.push('/login') }]
         );
       } else {
         // If we don't have a result.user but also no error was thrown
-        setError('Account created but verification is required. Please check your email.');
+        setError('Account created but something went wrong. Please try signing in.');
       }
-    } catch (err) {
+    } catch (err: unknown) {
       console.error('Registration error:', err);
       setError(err instanceof Error ? err.message : 'Failed to create account');
     } finally {
@@ -78,102 +130,102 @@ export default function RegisterScreen() {
   };
 
   return (
-     <ScrollView contentContainerStyle={{ flexGrow: 1 }}>
-    <View style={styles.container}>
+    <ScrollView contentContainerStyle={{ flexGrow: 1 }}>
+      <View style={styles.container}>
         <View style={styles.header}>
-        <Image
-          source={{ uri: 'https://images.unsplash.com/photo-1469854523086-cc02fe5d8800?w=800&auto=format&fit=crop&q=80' }}
-          style={styles.headerImage}
-        />
-        <View style={styles.overlay} />
-        <TouchableOpacity 
-          style={styles.backButton}
-          onPress={() => router.back()}
-        >
-          <Text style={styles.backButtonText}>← Back</Text>
-        </TouchableOpacity>
-        <Text style={styles.title}>Join TravZy</Text>
-        <Text style={styles.subtitle}>Create your account</Text>
-      </View>
-
-      <View style={styles.form}>
-        {error && (
-          <View style={styles.errorContainer}>
-            <Text style={styles.errorText}>{error}</Text>
-          </View>
-        )}
-        
-        {success && (
-          <View style={styles.successContainer}>
-            <Text style={styles.successText}>
-              Account created! Please check your email for verification instructions.
-            </Text>
-          </View>
-        )}
-        <TextInput
-          style={styles.input}
-          placeholder="Full Name"
-          value={name}
-          onChangeText={setName}
-          autoCapitalize="words"
-          editable={!loading && !success}
-        />
-        <TextInput
-          style={styles.input}
-          placeholder="Email"
-          value={email}
-          onChangeText={setEmail}
-          autoCapitalize="none"
-          keyboardType="email-address"
-          editable={!loading && !success}
-        />
-        <TextInput
-          style={styles.input}
-          placeholder="Phone Number"
-          value={phoneNumber}
-          onChangeText={setPhoneNumber}
-          keyboardType="phone-pad"
-          editable={!loading && !success}
-        />
-          <TextInput
-          style={styles.input}
-          placeholder="Password"
-          value={password}
-          onChangeText={setPassword}
-          secureTextEntry
-          editable={!loading && !success}
-         />
-        <TouchableOpacity 
-          style={[
-            styles.button, 
-            (loading || success) && styles.buttonDisabled
-          ]}
-          onPress={handleSignUp}
-          disabled={loading || success}
-        >
-          {loading ? (
-            <ActivityIndicator color="#fff" />
-          ) : (
-            <>
-              <UserPlus color="white" size={20} style={styles.buttonIcon} />
-              <Text style={styles.buttonText}>
-                {success ? 'Account Created' : 'Create Account'}
-              </Text>
-            </>
-          )}
-        </TouchableOpacity>
-
-        <Link href="/login" asChild>
-          <TouchableOpacity style={styles.linkButton}>
-            <Text style={styles.linkText}>
-              {success 
-                ? 'Go to Sign In'
-                : 'Already have an account? Sign in'}
-            </Text>
+          <Image
+            source={{ uri: 'https://images.unsplash.com/photo-1469854523086-cc02fe5d8800?w=800&auto=format&fit=crop&q=80' }}
+            style={styles.headerImage}
+          />
+          <View style={styles.overlay} />
+          <TouchableOpacity 
+            style={styles.backButton}
+            onPress={() => router.back()}
+          >
+            <Text style={styles.backButtonText}>← Back</Text>
           </TouchableOpacity>
-        </Link>
+          <Text style={styles.title}>Join TravZy</Text>
+          <Text style={styles.subtitle}>Create your account</Text>
+        </View>
+
+        <View style={styles.form}>
+          {error && (
+            <View style={styles.errorContainer}>
+              <Text style={styles.errorText}>{error}</Text>
+            </View>
+          )}
+          
+          {success && (
+            <View style={styles.successContainer}>
+              <Text style={styles.successText}>
+                Account created! You can now sign in with your credentials.
+              </Text>
+            </View>
+          )}
+          <TextInput
+            style={styles.input}
+            placeholder="Full Name"
+            value={name}
+            onChangeText={setName}
+            autoCapitalize="words"
+            editable={!loading && !success}
+          />
+          <TextInput
+            style={styles.input}
+            placeholder="Email"
+            value={email}
+            onChangeText={setEmail}
+            autoCapitalize="none"
+            keyboardType="email-address"
+            editable={!loading && !success}
+          />
+          <TextInput
+            style={styles.input}
+            placeholder="Phone Number"
+            value={phoneNumber}
+            onChangeText={setPhoneNumber}
+            keyboardType="phone-pad"
+            editable={!loading && !success}
+          />
+          <TextInput
+            style={styles.input}
+            placeholder="Password"
+            value={password}
+            onChangeText={setPassword}
+            secureTextEntry
+            editable={!loading && !success}
+          />
+          <TouchableOpacity 
+            style={[
+              styles.button, 
+              (loading || success) && styles.buttonDisabled
+            ]}
+            onPress={handleSignUp}
+            disabled={loading || success}
+          >
+            {loading ? (
+              <ActivityIndicator color="#fff" />
+            ) : (
+              <>
+                <UserPlus color="white" size={20} style={styles.buttonIcon} />
+                <Text style={styles.buttonText}>
+                  {success ? 'Account Created' : 'Create Account'}
+                </Text>
+              </>
+            )}
+          </TouchableOpacity>
+
+          <Link href="/login" asChild>
+            <TouchableOpacity style={styles.linkButton}>
+              <Text style={styles.linkText}>
+                {success 
+                  ? 'Go to Sign In'
+                  : 'Already have an account? Sign in'}
+              </Text>
+            </TouchableOpacity>
+          </Link>
+        </View>
       </View>
-    </View>
     </ScrollView>
   );
 }

@@ -3,7 +3,8 @@ import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Image, ActivityIn
 import { useLocalSearchParams } from 'expo-router';
 import { router } from 'expo-router';
 import { MapPin, Clock, Users, ArrowLeft, Star } from 'lucide-react-native';
-import { supabase } from '@/lib/supabase';
+import { auth, db } from '../../../firebase/Config'; // Importing from firebase config
+import { doc, getDoc, collection, addDoc, serverTimestamp } from 'firebase/firestore';
 
 type RideDetail = {
   id: string;
@@ -23,7 +24,7 @@ type RideDetail = {
 
 export default function RideDetailScreen() {
   const { id } = useLocalSearchParams();
-  const [user, setUser] = useState(null); // Simple user state without useAuth
+  const [user, setUser] = useState(null); 
   const [ride, setRide] = useState<RideDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [requestLoading, setRequestLoading] = useState(false);
@@ -32,50 +33,65 @@ export default function RideDetailScreen() {
 
   useEffect(() => {
     fetchRideDetails();
-    // Get current user from supabase
+    // Get current user from Firebase
     getCurrentUser();
   }, [id]);
 
-  const getCurrentUser = async () => {
-    try {
-      const { data, error } = await supabase.auth.getSession();
-      if (data?.session?.user) {
-        setUser(data.session.user);
+  const getCurrentUser = () => {
+    const unsubscribe = auth.onAuthStateChanged((currentUser) => {
+      if (currentUser) {
+        setUser(currentUser);
       }
-    } catch (err) {
-      console.error('Error getting current user:', err);
-    }
+    });
+    
+    // Cleanup the listener on component unmount
+    return () => unsubscribe();
   };
 
   const fetchRideDetails = async () => {
     try {
-      const { data, error } = await supabase
-        .from('rides')
-        .select('*')
-        .eq('id', id)
-        .single();
-
-      if (error) {
-        throw error;
+      // Reference to the ride document in Firestore
+      const rideDocRef = doc(db, 'rides', id as string);
+      const rideDoc = await getDoc(rideDocRef);
+      
+      if (!rideDoc.exists()) {
+        throw new Error('Ride not found');
+      }
+      
+      const rideData = rideDoc.data();
+      
+      // Get driver information
+      const driverDocRef = doc(db, 'users', rideData.driver_id);
+      const driverDoc = await getDoc(driverDocRef);
+      
+      let driverData = {
+        id: rideData.driver_id,
+        full_name: 'Unknown Driver',
+        avatar_url: 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=200&auto=format&fit=crop&q=80',
+        rating: 4.5
+      };
+      
+      if (driverDoc.exists()) {
+        const userData = driverDoc.data();
+        driverData = {
+          id: rideData.driver_id,
+          full_name: userData.fullName || 'Unknown Driver',
+          // Use a placeholder if avatar_url doesn't exist
+          avatar_url: userData.avatar_url || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=200&auto=format&fit=crop&q=80',
+          rating: userData.rating || 4.5,
+        };
       }
 
-      if (data) {
-        setRide({
-          id: data.id,
-          pickup_location: data.pickup_location,
-          dropoff_location: data.dropoff_location,
-          departure_time: data.departure_time,
-          available_seats: data.available_seats,
-          price: data.price,
-          vehicle_name: data.vehicle_name || 'Unknown Vehicle',
-          driver: {
-            id: data.driver_id,
-            full_name: data.driver_full_name || 'Unknown Driver',
-            avatar_url: data.driver_avatar_url || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=200&auto=format&fit=crop&q=80',
-            rating: data.driver_rating || 4.5,
-          }
-        });
-      }
+      setRide({
+        id: rideDoc.id,
+        pickup_location: rideData.pickup_location,
+        dropoff_location: rideData.dropoff_location,
+        departure_time: rideData.departure_time,
+        available_seats: rideData.available_seats,
+        price: rideData.price,
+        vehicle_name: rideData.vehicle_name || 'Unknown Vehicle',
+        driver: driverData
+      });
     } catch (err) {
       console.error('Error fetching ride details:', err);
       setError(err instanceof Error ? err.message : 'Failed to load ride details');
@@ -85,7 +101,7 @@ export default function RideDetailScreen() {
   };
 
   const handleRequestSeat = async () => {
-    if (!user) {
+    if (!auth.currentUser) {
       Alert.alert('Sign In Required', 'Please sign in to request a ride');
       router.push('/(auth)/login');
       return;
@@ -99,16 +115,15 @@ export default function RideDetailScreen() {
     setRequestLoading(true);
 
     try {
-      const { data, error } = await supabase
-        .from('ride_requests')
-        .insert({
-          ride_id: ride?.id,
-          passenger_id: user.id,
-          status: 'pending',
-          seats_requested: requestedSeats,
-        });
-
-      if (error) throw error;
+      const requestCollectionRef = collection(db, 'ride_requests');
+      
+      await addDoc(requestCollectionRef, {
+        ride_id: ride?.id,
+        passenger_id: auth.currentUser.uid,
+        status: 'pending',
+        seats_requested: requestedSeats,
+        created_at: serverTimestamp(),
+      });
 
       Alert.alert(
         'Request Submitted',

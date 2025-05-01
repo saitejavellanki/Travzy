@@ -1,18 +1,63 @@
 import { useState, useEffect } from 'react';
 import { View, Text, TextInput, TouchableOpacity, StyleSheet, Image, ActivityIndicator, Alert } from 'react-native';
-import { Link, router } from 'expo-router'; // Import router
+import { Link, router } from 'expo-router';
 import { LogIn } from 'lucide-react-native';
-import { signIn, getCurrentUser } from '@/lib/auth';
+import { getAuth, signInWithEmailAndPassword, onAuthStateChanged, User, UserCredential, AuthError } from 'firebase/auth';
+import { app } from '../../firebase/Config'; // Import the Firebase app from your config file
 
-export default function LoginScreen() {
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [loading, setLoading] = useState(false);
+// Initialize Firebase Auth
+const auth = getAuth(app);
+
+// These functions replace the Supabase auth methods
+const signIn = async (email: string, password: string): Promise<User> => {
+  try {
+    const userCredential: UserCredential = await signInWithEmailAndPassword(auth, email, password);
+    return userCredential.user;
+  } catch (error: unknown) {
+    console.error("Firebase sign-in error:", error);
+    
+    // Providing typeguard to narrow down the error type
+    const authError = error as AuthError;
+
+    // Provide user-friendly error messages
+    if (authError.code === 'auth/invalid-email') {
+      throw new Error('Invalid email address');
+    } else if (authError.code === 'auth/user-not-found') {
+      throw new Error('No account found with this email');
+    } else if (authError.code === 'auth/wrong-password') {
+      throw new Error('Incorrect password');
+    } else if (authError.code === 'auth/too-many-requests') {
+      throw new Error('Too many failed login attempts. Please try again later');
+    } else {
+      throw new Error('Login failed. Please check your credentials and try again');
+    }
+  }
+};
+
+const getCurrentUser = (): Promise<User | null> => {
+  return new Promise((resolve, reject) => {
+    const unsubscribe = onAuthStateChanged(auth, 
+      (user) => {
+        unsubscribe(); // Stop listening after first response
+        resolve(user);
+      },
+      (error) => {
+        unsubscribe();
+        reject(error);
+      }
+    );
+  });
+};
+
+export default function LoginScreen(): JSX.Element {
+  const [email, setEmail] = useState<string>('');
+  const [password, setPassword] = useState<string>('');
+  const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
 
   // Check if user is already logged in
   useEffect(() => {
-    const checkCurrentUser = async () => {
+    const checkCurrentUser = async (): Promise<void> => {
       try {
         setLoading(true);
         const user = await getCurrentUser();
@@ -31,7 +76,7 @@ export default function LoginScreen() {
     checkCurrentUser();
   }, []);
 
-  const handleSignIn = async () => {
+  const handleSignIn = async (): Promise<void> => {
     // Basic validation
     if (!email.trim()) {
       setError('Please enter your email');
@@ -63,7 +108,7 @@ export default function LoginScreen() {
           }
         }]
       );
-    } catch (err) {
+    } catch (err: unknown) {
       console.error("Login error:", err);
       setError(err instanceof Error ? err.message : 'Failed to sign in');
     } finally {

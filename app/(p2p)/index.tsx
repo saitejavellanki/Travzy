@@ -162,7 +162,7 @@ export default function HomeScreen() {
             status: relatedRide.status,
             driver_id: relatedRide.driver_id,
             driver_name: driverProfile?.full_name || 'Unknown Driver',
-            driver_phone: driverProfile?.phone_no || 'N/A',
+            driver_phone: driverProfile?.phoneNumber|| 'N/A',
             driver_avatar: driverProfile?.avatar_url || ''
           }
         };
@@ -245,8 +245,8 @@ export default function HomeScreen() {
           vehicle_name: ride.vehicle_name || 'Unknown Vehicle',
           driver: {
             id: ride.driver_id || 'unknown',
-            full_name: driverProfile?.full_name || 'Unknown Driver',
-            phone_no: driverProfile?.phone_no || 'N/A',
+            full_name: driverProfile?.fullName || 'Unknown Driver',
+            phone_no: driverProfile?.phoneNumber || 'N/A',
             avatar_url: driverProfile?.avatar_url || ''
           }
         };

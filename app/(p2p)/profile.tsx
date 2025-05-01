@@ -1,12 +1,14 @@
 import React, { useState, useEffect } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Image, Alert, ActivityIndicator } from 'react-native';
 import { User, LogOut, Settings, Heart, Car, StarIcon, Camera } from 'lucide-react-native';
-import { supabase } from '@/lib/supabase';
+import { auth, db, storage, logOut } from '../../firebase/Config';
 import { router } from 'expo-router';
 import * as ImagePicker from 'expo-image-picker';
+import { doc, getDoc, setDoc, updateDoc } from 'firebase/firestore';
+import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 
 type Profile = {
-  user_id: string;
+  uid: string;
   full_name: string;
   avatar_url: string | null;
   created_at: string;
@@ -26,36 +28,32 @@ export default function ProfileScreen() {
     try {
       setLoading(true);
       
-      // Get current session
-      const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+      // Get current user
+      const currentUser = auth.currentUser;
       
-      if (sessionError) throw sessionError;
-      
-      if (!session) {
+      if (!currentUser) {
         setError('You are not logged in');
         setLoading(false);
         return;
       }
 
-      // Get profile data
-      const { data, error: profileError } = await supabase
-        .from('profiles')
-        .select('*')
-        .eq('user_id', session.user.id)
-        .single();
+      // Get profile data from Firestore
+      const profileRef = doc(db, 'profiles', currentUser.uid);
+      const profileSnap = await getDoc(profileRef);
       
-      if (profileError) {
-        if (profileError.code === '42P01') {
-          // Table doesn't exist yet
-          setError('Profile table not set up. Please run database migration first.');
-        } else if (profileError.code === 'PGRST116') {
-          // No profile found for this user
-          setError('Profile not found. Please complete your profile setup.');
-        } else {
-          throw profileError;
-        }
+      if (profileSnap.exists()) {
+        setProfile(profileSnap.data() as Profile);
       } else {
-        setProfile(data);
+        // Create a basic profile if it doesn't exist
+        const newProfile = {
+          uid: currentUser.uid,
+          full_name: currentUser.displayName || 'User',
+          avatar_url: currentUser.photoURL,
+          created_at: new Date().toISOString(),
+        };
+        
+        await setDoc(profileRef, newProfile);
+        setProfile(newProfile);
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'An error occurred');
@@ -68,8 +66,7 @@ export default function ProfileScreen() {
   const handleLogout = async () => {
     try {
       setLoading(true);
-      const { error } = await supabase.auth.signOut();
-      if (error) throw error;
+      await logOut();
       
       // Navigate to login screen
       router.replace('/login');
@@ -111,60 +108,35 @@ export default function ProfileScreen() {
     try {
       setUploadingPhoto(true);
       
-      // Get session
-      const { data: sessionData } = await supabase.auth.getSession();
-      const session = sessionData?.session;
+      // Get current user
+      const currentUser = auth.currentUser;
       
-      if (!session) {
+      if (!currentUser) {
         throw new Error('Not logged in');
       }
       
-      // First, we need to convert the image URI to a file blob
+      // First, we need to convert the image URI to a blob
       const response = await fetch(uri);
       const blob = await response.blob();
       
-      // Create file name with proper extension
-      const fileName = `avatar-${session.user.id}-${Date.now()}.jpg`;
+      // Create a reference to Firebase Storage
+      const fileName = `avatars/${currentUser.uid}-${Date.now()}.jpg`;
+      const storageRef = ref(storage, fileName);
       
-      // Use the correct Supabase storage upload method
-      const { data, error } = await supabase
-        .storage
-        .from('avatars')
-        .upload(fileName, blob, {
-          contentType: 'image/jpeg',
-          upsert: true  // This will overwrite if the file exists
-        });
+      // Upload the file
+      await uploadBytes(storageRef, blob);
       
-      if (error) {
-        console.error('Supabase storage error details:', error);
-        throw error;
-      }
+      // Get the download URL
+      const downloadURL = await getDownloadURL(storageRef);
       
-      if (!data || !data.path) {
-        throw new Error('Upload succeeded but no path was returned');
-      }
+      // Update profile in Firestore
+      const profileRef = doc(db, 'profiles', currentUser.uid);
+      await updateDoc(profileRef, { 
+        avatar_url: downloadURL 
+      });
       
-      // Get the public URL
-      const { data: urlData } = supabase
-        .storage
-        .from('avatars')
-        .getPublicUrl(data.path);
-      
-      const publicUrl = urlData.publicUrl;
-      
-      // Update profile with the new URL
-      const { error: updateError } = await supabase
-        .from('profiles')
-        .update({ avatar_url: publicUrl })
-        .eq('user_id', session.user.id);
-        
-      if (updateError) {
-        console.error('Profile update error:', updateError);
-        throw updateError;
-      }
-      
-      // Refresh the profile data
-      setProfile(prev => prev ? { ...prev, avatar_url: publicUrl } : null);
+      // Update local state
+      setProfile(prev => prev ? { ...prev, avatar_url: downloadURL } : null);
       
       Alert.alert('Success', 'Profile photo updated successfully');
     } catch (error) {

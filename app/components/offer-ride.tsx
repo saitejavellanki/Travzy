@@ -13,8 +13,9 @@ import {
   KeyboardAvoidingView
 } from 'react-native';
 import { useRouter } from 'expo-router';
-import { supabase } from '../../lib/supabase';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { auth, db } from '../../firebase/Config';
+import { collection, addDoc, serverTimestamp } from 'firebase/firestore';
 
 const OfferRide = () => {
   const router = useRouter();
@@ -77,9 +78,9 @@ const OfferRide = () => {
 
     try {
       // Get the current user
-      const { data: { session } } = await supabase.auth.getSession();
+      const currentUser = auth.currentUser;
       
-      if (!session) {
+      if (!currentUser) {
         Alert.alert('Error', 'You must be logged in to offer a ride');
         setLoading(false);
         return;
@@ -87,23 +88,20 @@ const OfferRide = () => {
 
       // Create the ride object
       const rideData = {
-        driver_id: session.user.id,
+        driver_id: currentUser.uid,
         pickup_location: pickupLocation,
         dropoff_location: dropoffLocation,
         departure_time: departureDateTime.toISOString(),
         available_seats: seats,
         price: ridePrice,
         status: 'active',
-        vehicle_name: vehicleName
+        vehicle_name: vehicleName,
+        created_at: serverTimestamp()
       };
 
-      // Insert into Supabase
-      const { data, error } = await supabase
-        .from('rides')
-        .insert(rideData)
-        .select();
-
-      if (error) throw error;
+      // Insert into Firestore
+      const ridesCollection = collection(db, 'rides');
+      await addDoc(ridesCollection, rideData);
 
       Alert.alert(
         'Success',
@@ -352,7 +350,6 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   input: {
-    
     borderColor: '#ddd',
     borderRadius: 8,
     paddingHorizontal: 12,

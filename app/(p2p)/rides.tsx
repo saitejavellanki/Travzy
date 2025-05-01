@@ -1,50 +1,82 @@
 import React, { useState, useEffect } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Alert, ActivityIndicator, RefreshControl } from 'react-native';
-import { supabase } from '@/lib/supabase';
 import { Edit2, Trash2, Users, Clock, MapPin } from 'lucide-react-native';
 import { router } from 'expo-router';
+import { getAuth, onAuthStateChanged } from 'firebase/auth';
+import { getFirestore, collection, query, where, orderBy, getDocs, doc, updateDoc } from 'firebase/firestore';
+import { app } from '../../firebase/Config'; // Import the Firebase app from your config file
 
-export default function RidesScreen() {
-  const [userRides, setUserRides] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
-  const [userId, setUserId] = useState(null);
+// Initialize Firebase Auth and Firestore
+const auth = getAuth(app);
+const db = getFirestore(app);
+
+// Define Ride type for TypeScript
+interface Ride {
+  id: string;
+  driver_id: string;
+  pickup_location: string;
+  dropoff_location: string;
+  departure_time: string;
+  available_seats: number;
+  price: number;
+  status: 'active' | 'completed' | 'cancelled';
+  vehicle_name?: string;
+}
+
+export default function RidesScreen(): JSX.Element {
+  const [userRides, setUserRides] = useState<Ride[]>([]);
+  const [loading, setLoading] = useState<boolean>(true);
+  const [refreshing, setRefreshing] = useState<boolean>(false);
+  const [userId, setUserId] = useState<string | null>(null);
 
   useEffect(() => {
     getUserSession();
   }, []);
 
-  const getUserSession = async () => {
+  const getUserSession = async (): Promise<void> => {
     try {
-      const { data: { session }, error } = await supabase.auth.getSession();
-      if (error) throw error;
-      
-      if (session?.user) {
-        setUserId(session.user.id);
-        fetchUserRides(session.user.id);
-      } else {
-        setLoading(false);
-        Alert.alert('Not logged in', 'Please login to view your rides');
-      }
+      const unsubscribe = onAuthStateChanged(auth, (user) => {
+        if (user) {
+          setUserId(user.uid);
+          fetchUserRides(user.uid);
+        } else {
+          setLoading(false);
+          Alert.alert('Not logged in', 'Please login to view your rides');
+        }
+      });
+
+      // Clean up subscription
+      return () => unsubscribe();
     } catch (error) {
       console.error('Error getting user session:', error);
       setLoading(false);
     }
   };
 
-  const fetchUserRides = async (uid) => {
+  const fetchUserRides = async (uid: string): Promise<void> => {
     try {
       setLoading(true);
       
-      const { data, error } = await supabase
-        .from('rides')
-        .select('*')
-        .eq('driver_id', uid)
-        .order('departure_time', { ascending: true });
+      // Create query for rides collection
+      const ridesQuery = query(
+        collection(db, 'rides'),
+        where('driver_id', '==', uid),
+        orderBy('departure_time', 'asc')
+      );
       
-      if (error) throw error;
+      // Get documents
+      const querySnapshot = await getDocs(ridesQuery);
       
-      setUserRides(data || []);
+      // Process results
+      const rides: Ride[] = [];
+      querySnapshot.forEach((doc) => {
+        rides.push({
+          id: doc.id,
+          ...doc.data()
+        } as Ride);
+      });
+      
+      setUserRides(rides);
     } catch (error) {
       console.error('Error fetching user rides:', error);
       Alert.alert('Error', 'Failed to load your rides');
@@ -54,7 +86,7 @@ export default function RidesScreen() {
     }
   };
 
-  const onRefresh = () => {
+  const onRefresh = (): void => {
     setRefreshing(true);
     if (userId) {
       fetchUserRides(userId);
@@ -63,7 +95,7 @@ export default function RidesScreen() {
     }
   };
 
-  const handleUpdateSeats = (ride) => {
+  const handleUpdateSeats = (ride: Ride): void => {
     // Show dialog to update seats
     Alert.prompt(
       'Update Available Seats',
@@ -75,7 +107,7 @@ export default function RidesScreen() {
         },
         {
           text: 'Update',
-          onPress: (seats) => updateRideSeats(ride.id, parseInt(seats)),
+          onPress: (seats) => updateRideSeats(ride.id, parseInt(seats || '0')),
         },
       ],
       'plain-text',
@@ -83,7 +115,7 @@ export default function RidesScreen() {
     );
   };
 
-  const updateRideSeats = async (rideId, seats) => {
+  const updateRideSeats = async (rideId: string, seats: number): Promise<void> => {
     try {
       if (isNaN(seats) || seats < 0) {
         Alert.alert('Invalid input', 'Please enter a valid number of seats');
@@ -92,15 +124,16 @@ export default function RidesScreen() {
 
       setLoading(true);
       
-      const { error } = await supabase
-        .from('rides')
-        .update({ available_seats: seats })
-        .eq('id', rideId);
-      
-      if (error) throw error;
+      // Update document in Firestore
+      const rideRef = doc(db, 'rides', rideId);
+      await updateDoc(rideRef, {
+        available_seats: seats
+      });
       
       Alert.alert('Success', 'Seats updated successfully');
-      fetchUserRides(userId);
+      if (userId) {
+        fetchUserRides(userId);
+      }
     } catch (error) {
       console.error('Error updating seats:', error);
       Alert.alert('Error', 'Failed to update seats');
@@ -108,7 +141,7 @@ export default function RidesScreen() {
     }
   };
 
-  const handleCancelRide = (rideId) => {
+  const handleCancelRide = (rideId: string): void => {
     Alert.alert(
       'Cancel Ride',
       'Are you sure you want to cancel this ride?',
@@ -126,19 +159,20 @@ export default function RidesScreen() {
     );
   };
 
-  const cancelRide = async (rideId) => {
+  const cancelRide = async (rideId: string): Promise<void> => {
     try {
       setLoading(true);
       
-      const { error } = await supabase
-        .from('rides')
-        .update({ status: 'cancelled' })
-        .eq('id', rideId);
-      
-      if (error) throw error;
+      // Update document status in Firestore
+      const rideRef = doc(db, 'rides', rideId);
+      await updateDoc(rideRef, {
+        status: 'cancelled'
+      });
       
       Alert.alert('Success', 'Ride cancelled successfully');
-      fetchUserRides(userId);
+      if (userId) {
+        fetchUserRides(userId);
+      }
     } catch (error) {
       console.error('Error cancelling ride:', error);
       Alert.alert('Error', 'Failed to cancel ride');
@@ -170,7 +204,7 @@ export default function RidesScreen() {
             <Text style={styles.emptyText}>You haven't offered any rides yet</Text>
             <TouchableOpacity 
                     style={styles.offerButton}
-                    onPress={() => router.push('./components/offer-ride')}
+                    onPress={() => router.push('/offer-ride')}
                   >
                     <Text style={styles.offerButtonText}>Offer a Ride</Text>
                   </TouchableOpacity>
