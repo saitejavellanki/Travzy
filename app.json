@@ -9,7 +9,30 @@
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.tejvellank.boltexponativewind",
+      "config": {
+        "googleMapsApiKey": "AIzaSyChXhoyNAhI2th0bDnlCDXAwpz1erwBPo8"
+      },
+      "infoPlist": {
+        "NSLocationWhenInUseUsageDescription": "This app uses your location to provide ride-hailing services."
+      }
+    },
+    "android": {
+      "package": "com.tejvellank.boltexponativewind",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/images/icon.png",
+        "backgroundColor": "#ffffff"
+      },
+      "config": {
+        "googleMaps": {
+          "apiKey": "AIzaSyChXhoyNAhI2th0bDnlCDXAwpz1erwBPo8"
+        }
+      },
+      "permissions": [
+        "ACCESS_COARSE_LOCATION",
+        "ACCESS_FINE_LOCATION"
+      ]
     },
     "web": {
       "bundler": "metro",
@@ -18,7 +41,13 @@
     },
     "plugins": [
       "expo-router",
-      "expo-secure-store"
+      "expo-secure-store",
+      [
+        "expo-location",
+        {
+          "locationAlwaysAndWhenInUsePermission": "Allow Bolt to use your location for finding nearby ride services and pickups."
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": false
@@ -29,16 +58,8 @@
       },
       "eas": {
         "projectId": "c4785e31-b16c-4950-9922-f24f95c6c3b1"
-      }
-    },
-    "android": {
-      "package": "com.tejvellank.boltexponativewind",
-      // "compileSdkVersion": 34,
-      // "buildToolsVersion": "34.0.0",
-      "adaptiveIcon": {
-        "foregroundImage": "./assets/images/icon.png",
-        "backgroundColor": "#ffffff"
-      }
+      },
+      "googlePlacesApiKey": "AIzaSyChXhoyNAhI2th0bDnlCDXAwpz1erwBPo8"
     }
   }
 }

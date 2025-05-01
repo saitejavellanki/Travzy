@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Image, ActivityIndicator, RefreshControl, TextInput } from 'react-native';
-import { Search, MapPin, Clock, Users, Check, Phone } from 'lucide-react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Image, ActivityIndicator, RefreshControl, TextInput, Modal, FlatList } from 'react-native';
+import { Search, MapPin, Clock, Users, Check, Phone, ChevronDown } from 'lucide-react-native';
 import { router } from 'expo-router';
 import { 
   getAuth, 
@@ -34,6 +34,19 @@ const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
 
+// Predefined locations
+const LOCATIONS = [
+  "Vijayawada",
+  "Guntur",
+  "Mangalagiri",
+  "Tenali",
+  "Thulluru",
+  "Mandhadam",
+  "Inavolu",
+  "Tadikonda",
+  "VIT-AP"
+];
+
 export default function HomeScreen() {
   const [rides, setRides] = useState([]);
   const [filteredRides, setFilteredRides] = useState([]);
@@ -43,6 +56,7 @@ export default function HomeScreen() {
   const [error, setError] = useState(null);
   const [userRideRequests, setUserRideRequests] = useState([]);
   const [currentUserId, setCurrentUserId] = useState(null);
+  const [dropdownVisible, setDropdownVisible] = useState(false);
 
   // Fetch current user
   const fetchCurrentUser = async () => {
@@ -301,6 +315,11 @@ export default function HomeScreen() {
     setSearchQuery(text);
   };
 
+  const selectLocation = (location) => {
+    setSearchQuery(location);
+    setDropdownVisible(false);
+  };
+
   // Get accepted ride requests
   const acceptedRideRequests = userRideRequests.filter(request => 
     request.status.toLowerCase() === 'accepted'
@@ -321,16 +340,49 @@ export default function HomeScreen() {
         <Text style={styles.title}>Find a ride</Text>
       </View>
 
-      <View style={styles.searchBar}>
+      {/* Modified search bar with dropdown */}
+      <TouchableOpacity 
+        style={styles.searchBar}
+        onPress={() => setDropdownVisible(true)}
+      >
         <Search size={20} color="#64748B" />
-        <TextInput
-          style={styles.searchInput}
-          placeholder="Where are you going?"
-          placeholderTextColor="#64748B"
-          value={searchQuery}
-          onChangeText={handleSearchChange}
-        />
-      </View>
+        <Text style={[styles.searchInput, !searchQuery && styles.searchPlaceholder]}>
+          {searchQuery || "Where are you going?"}
+        </Text>
+        <ChevronDown size={20} color="#64748B" />
+      </TouchableOpacity>
+
+      {/* Location Dropdown Modal */}
+      <Modal
+        visible={dropdownVisible}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={() => setDropdownVisible(false)}
+      >
+        <TouchableOpacity 
+          style={styles.modalOverlay}
+          activeOpacity={1}
+          onPress={() => setDropdownVisible(false)}
+        >
+          <View style={styles.modalContent}>
+            <Text style={styles.modalTitle}>Select Destination</Text>
+            <FlatList
+              data={LOCATIONS}
+              keyExtractor={(item) => item}
+              renderItem={({ item }) => (
+                <TouchableOpacity
+                  style={styles.locationItem}
+                  onPress={() => selectLocation(item)}
+                >
+                  <MapPin size={16} color="#3B82F6" />
+                  <Text style={styles.locationItemText}>{item}</Text>
+                </TouchableOpacity>
+              )}
+              ItemSeparatorComponent={() => <View style={styles.separator} />}
+            />
+          </View>
+        </TouchableOpacity>
+      </Modal>
 
       <ScrollView 
         style={styles.content} 
@@ -551,11 +603,50 @@ const styles = StyleSheet.create({
     color: '#1E293B',
     fontFamily: 'Inter-Regular',
   },
-  searchText: {
+  searchPlaceholder: {
+    color: '#64748B',
+  },
+  // Modal styles
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  modalContent: {
+    width: '80%',
+    maxHeight: '60%',
+    backgroundColor: 'white',
+    borderRadius: 16,
+    padding: 16,
+    elevation: 5,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 3.84,
+  },
+  modalTitle: {
+    fontSize: 18,
+    fontFamily: 'Inter-SemiBold',
+    color: '#1E293B',
+    marginBottom: 16,
+    textAlign: 'center',
+  },
+  locationItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 12,
+    paddingHorizontal: 8,
+  },
+  locationItemText: {
     marginLeft: 12,
     fontSize: 16,
-    color: '#64748B',
-    fontFamily: 'Inter-Regular',
+    color: '#1E293B',
+    fontFamily: 'Inter-Medium',
+  },
+  separator: {
+    height: 1,
+    backgroundColor: '#E2E8F0',
   },
   content: {
     flex: 1,

@@ -10,25 +10,44 @@ import {
   ActivityIndicator,
   Alert,
   Platform,
-  KeyboardAvoidingView
+  KeyboardAvoidingView,
+  Modal,
+  FlatList
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { auth, db } from '../../firebase/Config';
 import { collection, addDoc, serverTimestamp } from 'firebase/firestore';
 
+// Predefined locations
+const LOCATIONS = [
+  "Vijayawada", 
+  "Guntur", 
+  "Mangalagiri", 
+  "Tenali", 
+  "Thulluru", 
+  "Mandhadam", 
+  "Inavolu", 
+  "Tadikonda", 
+  "VIT-AP"
+];
+
 const OfferRide = () => {
   const router = useRouter();
   const [loading, setLoading] = useState(false);
   
   // Form state
-  const [pickupLocation, setPickupLocation] = useState('');
+  const [pickupLocation, setPickupLocation] = useState('VIT-AP'); // Default to VIT-AP
   const [dropoffLocation, setDropoffLocation] = useState('');
   const [departureDate, setDepartureDate] = useState('');
   const [departureTime, setDepartureTime] = useState('');
   const [availableSeats, setAvailableSeats] = useState('1');
   const [price, setPrice] = useState('0');
   const [vehicleName, setVehicleName] = useState('');
+
+  // Dropdown states
+  const [showPickupDropdown, setShowPickupDropdown] = useState(false);
+  const [showDropoffDropdown, setShowDropoffDropdown] = useState(false);
 
   const handleSubmit = async () => {
     // Validate form data
@@ -116,6 +135,51 @@ const OfferRide = () => {
     }
   };
 
+  // Location selection handler
+  const selectLocation = (location: string, isPickup: boolean) => {
+    if (isPickup) {
+      setPickupLocation(location);
+      setShowPickupDropdown(false);
+    } else {
+      setDropoffLocation(location);
+      setShowDropoffDropdown(false);
+    }
+  };
+
+  // Location dropdown component
+  const LocationDropdown = ({ visible, onClose, onSelect, isPickup }) => (
+    <Modal
+      visible={visible}
+      transparent={true}
+      animationType="fade"
+      onRequestClose={onClose}
+    >
+      <TouchableOpacity 
+        style={styles.modalOverlay}
+        activeOpacity={1}
+        onPress={onClose}
+      >
+        <View style={styles.dropdownContainer}>
+          <Text style={styles.dropdownTitle}>
+            {isPickup ? 'Select Pickup Location' : 'Select Dropoff Location'}
+          </Text>
+          <FlatList
+            data={LOCATIONS}
+            keyExtractor={(item) => item}
+            renderItem={({ item }) => (
+              <TouchableOpacity 
+                style={styles.dropdownItem}
+                onPress={() => onSelect(item)}
+              >
+                <Text style={styles.dropdownItemText}>{item}</Text>
+              </TouchableOpacity>
+            )}
+          />
+        </View>
+      </TouchableOpacity>
+    </Modal>
+  );
+
   return (
     <SafeAreaView style={styles.safeArea}>
       <KeyboardAvoidingView
@@ -138,27 +202,43 @@ const OfferRide = () => {
               <View style={styles.locationInputsContainer}>
                 <View style={styles.inputContainer}>
                   <Text style={styles.inputLabel}>PICKUP</Text>
-                  <TextInput
-                    style={styles.locationInput}
-                    value={pickupLocation}
-                    onChangeText={setPickupLocation}
-                    placeholder="Enter pickup location"
-                    placeholderTextColor="#aaa"
-                  />
+                  <TouchableOpacity 
+                    style={styles.locationInputButton}
+                    onPress={() => setShowPickupDropdown(true)}
+                  >
+                    <Text style={[styles.locationInput, !pickupLocation && styles.placeholderText]}>
+                      {pickupLocation || "Select pickup location"}
+                    </Text>
+                  </TouchableOpacity>
                 </View>
                 <View style={styles.divider} />
                 <View style={styles.inputContainer}>
                   <Text style={styles.inputLabel}>DROPOFF</Text>
-                  <TextInput
-                    style={styles.locationInput}
-                    value={dropoffLocation}
-                    onChangeText={setDropoffLocation}
-                    placeholder="Enter dropoff location"
-                    placeholderTextColor="#aaa"
-                  />
+                  <TouchableOpacity 
+                    style={styles.locationInputButton}
+                    onPress={() => setShowDropoffDropdown(true)}
+                  >
+                    <Text style={[styles.locationInput, !dropoffLocation && styles.placeholderText]}>
+                      {dropoffLocation || "Select dropoff location"}
+                    </Text>
+                  </TouchableOpacity>
                 </View>
               </View>
             </View>
+
+            {/* Location Dropdowns */}
+            <LocationDropdown 
+              visible={showPickupDropdown}
+              onClose={() => setShowPickupDropdown(false)}
+              onSelect={(location) => selectLocation(location, true)}
+              isPickup={true}
+            />
+            <LocationDropdown 
+              visible={showDropoffDropdown}
+              onClose={() => setShowDropoffDropdown(false)}
+              onSelect={(location) => selectLocation(location, false)}
+              isPickup={false}
+            />
           </View>
 
           <View style={styles.formSection}>
@@ -330,6 +410,12 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: '#333',
   },
+  placeholderText: {
+    color: '#aaa',
+  },
+  locationInputButton: {
+    padding: 4,
+  },
   divider: {
     height: 1,
     backgroundColor: '#eee',
@@ -377,6 +463,41 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: 'bold',
     letterSpacing: 1,
+  },
+  // Dropdown styles
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  dropdownContainer: {
+    width: '80%',
+    maxHeight: '70%',
+    backgroundColor: 'white',
+    borderRadius: 10,
+    padding: 16,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 3.84,
+    elevation: 5,
+  },
+  dropdownTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#333',
+    marginBottom: 16,
+    textAlign: 'center',
+  },
+  dropdownItem: {
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#eee',
+  },
+  dropdownItemText: {
+    fontSize: 16,
+    color: '#333',
   },
 });
 

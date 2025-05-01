@@ -4,11 +4,32 @@ import { MapPin, Navigation, ChevronRight, X, Crosshair, Search } from 'lucide-r
 import { auth, db } from '../../firebase/Config';
 import { collection, getDocs, query, where } from 'firebase/firestore';
 import * as Location from 'expo-location';
-import { router } from 'expo-router'; // Import router from expo-router
+import { router } from 'expo-router';
+import { GooglePlacesAutocomplete } from 'react-native-google-places-autocomplete';
+import 'react-native-get-random-values';
+import { v4 as uuidv4 } from 'uuid';
 
-export default function BookAutoScreen() { // Remove navigation prop
-  const [pickup, setPickup] = useState('');
+// Add your Google API key here
+const GOOGLE_PLACES_API_KEY = 'AIzaSyChXhoyNAhI2th0bDnlCDXAwpz1erwBPo8';
+const newId = uuidv4();
+
+// VIT-AP University coordinates and address
+const VIT_AP_LOCATION = {
+  description: 'VIT-AP University',
+  address: 'Near Vijayawada, Inavolu, Andhra Pradesh 522237',
+  geometry: {
+    location: {
+      lat: 16.4906,
+      lng: 80.5192
+    }
+  }
+};
+
+export default function BookAutoScreen() {
+  const [pickup, setPickup] = useState(VIT_AP_LOCATION.description);
+  const [pickupDetails, setPickupDetails] = useState(VIT_AP_LOCATION);
   const [destination, setDestination] = useState('');
+  const [destinationDetails, setDestinationDetails] = useState(null);
   const [savedLocations, setSavedLocations] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -23,18 +44,17 @@ export default function BookAutoScreen() { // Remove navigation prop
   });
   const [selectedRideType, setSelectedRideType] = useState('regular');
   
-  // For place suggestions
-  const [placeSuggestions, setPlaceSuggestions] = useState([]);
-  const [showSuggestions, setShowSuggestions] = useState(false);
-  const [activeField, setActiveField] = useState(null); // 'pickup' or 'destination'
-  const [fetchingSuggestions, setFetchingSuggestions] = useState(false);
+  // For place input focus states
+  const [pickupFocused, setPickupFocused] = useState(false);
+  const [destinationFocused, setDestinationFocused] = useState(false);
   
   // For location permission tracking
   const [locationPermission, setLocationPermission] = useState(null);
   const [fetchingCurrentLocation, setFetchingCurrentLocation] = useState(false);
   
-  // Debounce timer for search suggestions
-  const searchTimer = useRef(null);
+  // References for GooglePlacesAutocomplete
+  const pickupRef = useRef(null);
+  const destinationRef = useRef(null);
 
   useEffect(() => {
     fetchSavedLocations();
@@ -91,75 +111,35 @@ export default function BookAutoScreen() { // Remove navigation prop
   const handleSelectSavedLocation = (location, type) => {
     if (type === 'pickup') {
       setPickup(location.address);
+      setPickupDetails({
+        description: location.name,
+        address: location.address,
+        geometry: {
+          location: {
+            lat: location.latitude || 0,
+            lng: location.longitude || 0
+          }
+        }
+      });
+      if (pickupRef.current) {
+        pickupRef.current.setAddressText(location.address);
+      }
     } else {
       setDestination(location.address);
-    }
-    setShowSuggestions(false);
-  };
-  
-  // Search for place suggestions based on input text
-  const searchPlaces = async (text, fieldType) => {
-    if (text.length < 3) {
-      setPlaceSuggestions([]);
-      setShowSuggestions(false);
-      return;
-    }
-
-    try {
-      setFetchingSuggestions(true);
-      setActiveField(fieldType);
-      setShowSuggestions(true);
-      
-      // Use Expo Location's geocodeAsync as a simple suggestion engine
-      // In a production app, you might want to use Google Places API or similar service
-      const results = await Location.geocodeAsync(text);
-      
-      // Mock suggestions for demo purposes (since geocodeAsync doesn't provide multiple suggestions)
-      // In production, replace this with real API calls to a places service
-      const mockSuggestions = [
-        { id: '1', name: `${text} Main Street`, address: `${text} Main Street, City` },
-        { id: '2', name: `${text} Center`, address: `${text} Shopping Center, Downtown` },
-        { id: '3', name: `${text} Park`, address: `${text} Park Road, City Central` },
-      ];
-      
-      if (results && results.length > 0) {
-        // Add the actual geocoded result to our mock suggestions
-        mockSuggestions.unshift({
-          id: '0',
-          name: text,
-          address: text,
-          coordinates: {
-            latitude: results[0].latitude,
-            longitude: results[0].longitude
+      setDestinationDetails({
+        description: location.name,
+        address: location.address,
+        geometry: {
+          location: {
+            lat: location.latitude || 0,
+            lng: location.longitude || 0
           }
-        });
+        }
+      });
+      if (destinationRef.current) {
+        destinationRef.current.setAddressText(location.address);
       }
-      
-      setPlaceSuggestions(mockSuggestions);
-    } catch (err) {
-      console.error('Error fetching place suggestions:', err);
-    } finally {
-      setFetchingSuggestions(false);
     }
-  };
-  
-  // Handle text input change with debounce
-  const handleInputChange = (text, fieldType) => {
-    if (fieldType === 'pickup') {
-      setPickup(text);
-    } else {
-      setDestination(text);
-    }
-    
-    // Clear previous timer
-    if (searchTimer.current) {
-      clearTimeout(searchTimer.current);
-    }
-    
-    // Set up new timer for debounce
-    searchTimer.current = setTimeout(() => {
-      searchPlaces(text, fieldType);
-    }, 700);
   };
   
   // Get current location for pickup
@@ -193,7 +173,20 @@ export default function BookAutoScreen() { // Remove navigation prop
           `${address.name || ''} ${address.street || ''}, ${address.city || ''}, ${address.region || ''}`.trim();
         
         setPickup(formattedAddress);
-        setShowSuggestions(false);
+        setPickupDetails({
+          description: formattedAddress,
+          address: formattedAddress,
+          geometry: {
+            location: {
+              lat: location.coords.latitude,
+              lng: location.coords.longitude
+            }
+          }
+        });
+        
+        if (pickupRef.current) {
+          pickupRef.current.setAddressText(formattedAddress);
+        }
       }
     } catch (err) {
       console.error('Error getting current location:', err);
@@ -203,27 +196,47 @@ export default function BookAutoScreen() { // Remove navigation prop
     }
   };
   
-  // Get coordinates from address using Geocoding
-  const getCoordinates = async (address) => {
+  // Calculate distance between two coordinates using the Distance Matrix API
+  const calculateDistanceWithAPI = async (origin, destination) => {
     try {
-      const result = await Location.geocodeAsync(address);
+      const response = await fetch(
+        `https://maps.googleapis.com/maps/api/distancematrix/json?origins=${origin.lat},${origin.lng}&destinations=${destination.lat},${destination.lng}&mode=driving&key=${GOOGLE_PLACES_API_KEY}`
+      );
       
-      if (result && result.length > 0) {
+      const data = await response.json();
+      
+      if (data.status === 'OK' && data.rows[0].elements[0].status === 'OK') {
+        const distanceText = data.rows[0].elements[0].distance.text;
+        const distanceValue = data.rows[0].elements[0].distance.value / 1000; // Convert meters to km
+        
+        const durationText = data.rows[0].elements[0].duration.text;
+        const durationValue = data.rows[0].elements[0].duration.value / 60; // Convert seconds to minutes
+        
         return {
-          latitude: result[0].latitude,
-          longitude: result[0].longitude
+          distance: distanceValue,
+          duration: durationValue
         };
+      } else {
+        throw new Error('Could not calculate distance');
       }
+    } catch (error) {
+      console.error('Error calculating distance with API:', error);
       
-      throw new Error('Location not found');
-    } catch (err) {
-      console.error('Geocoding error:', err);
-      throw err;
+      // Fallback to Haversine formula
+      const distanceKm = calculateHaversineDistance(
+        { latitude: origin.lat, longitude: origin.lng },
+        { latitude: destination.lat, longitude: destination.lng }
+      );
+      
+      return {
+        distance: distanceKm,
+        duration: calculateDuration(distanceKm)
+      };
     }
   };
   
-  // Calculate distance between two coordinates using Haversine formula
-  const calculateDistance = (coord1, coord2) => {
+  // Calculate distance between two coordinates using Haversine formula (fallback)
+  const calculateHaversineDistance = (coord1, coord2) => {
     const R = 6371; // Earth's radius in km
     const dLat = (coord2.latitude - coord1.latitude) * Math.PI / 180;
     const dLon = (coord2.longitude - coord1.longitude) * Math.PI / 180;
@@ -262,28 +275,29 @@ export default function BookAutoScreen() { // Remove navigation prop
   const handleBookAuto = async () => {
     if (!pickup || !destination) return;
     
-    // Dismiss keyboard and suggestions
+    // Dismiss keyboard
     Keyboard.dismiss();
-    setShowSuggestions(false);
     
     try {
       setCalculatingPrice(true);
       setShowPricing(true);
       
+      if (!pickupDetails || !destinationDetails) {
+        throw new Error('Location details not available');
+      }
+      
       // Get coordinates for pickup and destination
-      const pickupCoords = await getCoordinates(pickup);
-      const destCoords = await getCoordinates(destination);
+      const pickupCoords = pickupDetails.geometry.location;
+      const destCoords = destinationDetails.geometry.location;
       
-      // Calculate distance
-      const distanceInKm = calculateDistance(pickupCoords, destCoords);
-      setDistance(distanceInKm);
+      // Calculate distance and duration using Google API
+      const routeDetails = await calculateDistanceWithAPI(pickupCoords, destCoords);
       
-      // Calculate duration
-      const durationInMinutes = calculateDuration(distanceInKm);
-      setDuration(durationInMinutes);
+      setDistance(routeDetails.distance);
+      setDuration(routeDetails.duration);
       
       // Calculate prices
-      const calculatedPrices = calculatePrices(distanceInKm);
+      const calculatedPrices = calculatePrices(routeDetails.distance);
       setPrices(calculatedPrices);
       
     } catch (err) {
@@ -294,45 +308,141 @@ export default function BookAutoScreen() { // Remove navigation prop
     }
   };
 
-  // Handle suggestion selection
-  const handleSelectSuggestion = (suggestion) => {
-    if (activeField === 'pickup') {
-      setPickup(suggestion.address);
-    } else {
-      setDestination(suggestion.address);
-    }
-    setShowSuggestions(false);
-  };
-
-  // Close suggestions when tapping outside
-  const handlePressOutside = () => {
-    if (showSuggestions) {
-      setShowSuggestions(false);
-      Keyboard.dismiss();
-    }
-  };
-
   // Handle booking confirmation and navigate to RideSearchScreen
   const confirmRideBooking = () => {
+    // Check if destination details are available
+    if (!pickupDetails || !destinationDetails) {
+      alert('Location details are incomplete. Please try again.');
+      return;
+    }
+    
     // Get the price for the selected ride type
     const selectedPrice = prices[selectedRideType];
     
     // Close the modal
     setShowPricing(false);
     
-    // Use router.push instead of navigation.navigate
-    router.push({
-      pathname: '/RideSearchScreen.tsx',
-      params: {
-        pickup,
-        destination,
-        distance,
-        duration,
-        price: selectedPrice,
-        rideType: selectedRideType
-      }
-    });
+    // Store ride data globally for access in the next screen
+    global.rideData = {
+      pickup: pickupDetails.description,
+      destination: destinationDetails.description,
+      distance,
+      duration,
+      price: selectedPrice,
+      rideType: selectedRideType
+    };
+    
+    // Navigate with just the path, no parameters
+    router.push('/components/ride/RideSearchScreen');
+  }
+
+  // Close keyboard when tapping outside input fields
+  const handlePressOutside = () => {
+    Keyboard.dismiss();
+    setPickupFocused(false);
+    setDestinationFocused(false);
   };
+
+useEffect(() => {
+  // Set VIT-AP as default pickup on component mount
+  if (pickupRef.current && pickup === VIT_AP_LOCATION.description) {
+    setTimeout(() => {
+      pickupRef.current.setAddressText(VIT_AP_LOCATION.description);
+    }, 100); // Small delay to ensure ref is ready
+  }
+}, []);
+
+//useEffect to handle changes to pickup/destination state
+useEffect(() => {
+  if (pickupRef.current) {
+    pickupRef.current.setAddressText(pickup);
+  }
+}, [pickup]);
+
+useEffect(() => {
+  if (destinationRef.current) {
+    destinationRef.current.setAddressText(destination);
+  }
+}, [destination]);
+//google places handling
+const renderGooglePlacesInput = (type) => {
+  const isPickup = type === 'pickup';
+  const placeholder = isPickup ? 'Pickup location' : 'Where to?';
+  const icon = isPickup ? <MapPin size={20} color="#3B82F6" /> : <Navigation size={20} color="#3B82F6" />;
+  const ref = isPickup ? pickupRef : destinationRef;
+  const setFocused = isPickup ? setPickupFocused : setDestinationFocused;
+  
+  return (
+    <View style={styles.locationInputContainer}>
+      <View style={styles.iconContainer}>
+        {icon}
+      </View>
+      <GooglePlacesAutocomplete
+        ref={ref}
+        placeholder={placeholder}
+        minLength={2}
+        onPress={(data, details = null) => {
+          if (isPickup) {
+            setPickup(data.description);
+            setPickupDetails(details || data);
+          } else {
+            setDestination(data.description);
+            setDestinationDetails(details || data);
+          }
+          setFocused(false);
+        }}
+        returnKeyType={'default'}
+        fetchDetails={true}
+        enablePoweredByContainer={false}
+        query={{
+          key: GOOGLE_PLACES_API_KEY,
+          language: 'en',
+          components: 'country:in', // Limit results to India
+        }}
+        textInputProps={{
+          onFocus: () => setFocused(true),
+          onBlur: () => setFocused(false),
+          placeholderTextColor: '#94A3B8',
+        }}
+        styles={{
+          textInput: styles.googlePlacesInput,
+          container: styles.googlePlacesContainer,
+          listView: styles.googlePlacesList,
+          row: styles.googlePlacesRow,
+          description: styles.googlePlacesDescription,
+          separator: styles.googlePlacesSeparator,
+          poweredContainer: { display: 'none' },
+        }}
+        renderRow={(data) => (
+          <View style={styles.suggestionItem}>
+            <View style={styles.suggestionIcon}>
+              <Search size={18} color="#64748B" />
+            </View>
+            <View style={styles.suggestionDetails}>
+              <Text style={styles.suggestionName}>{data.description}</Text>
+              <Text style={styles.suggestionAddress}>{data.structured_formatting?.secondary_text || ''}</Text>
+            </View>
+          </View>
+        )}
+        debounce={400}
+        onFail={(error) => console.error("Google Places Error:", error)}
+      />
+      {isPickup && (
+        <TouchableOpacity 
+          style={styles.currentLocationBtn}
+          onPress={getCurrentLocation}
+          disabled={fetchingCurrentLocation}
+        >
+          {fetchingCurrentLocation ? (
+            <ActivityIndicator size="small" color="#3B82F6" />
+          ) : (
+            <Crosshair size={20} color="#3B82F6" />
+          )}
+        </TouchableOpacity>
+      )}
+    </View>
+  );
+};
 
   return (
     <TouchableOpacity 
@@ -345,95 +455,14 @@ export default function BookAutoScreen() { // Remove navigation prop
       </View>
 
       <View style={styles.locationCard}>
-        <View style={styles.locationInputContainer}>
-          <View style={styles.iconContainer}>
-            <MapPin size={20} color="#3B82F6" />
-          </View>
-          <TextInput
-            style={styles.input}
-            placeholder="Pickup location"
-            value={pickup}
-            onChangeText={(text) => handleInputChange(text, 'pickup')}
-            onFocus={() => {
-              setActiveField('pickup');
-              if (pickup.length >= 3) {
-                setShowSuggestions(true);
-                searchPlaces(pickup, 'pickup');
-              }
-            }}
-          />
-          <TouchableOpacity 
-            style={styles.currentLocationBtn}
-            onPress={getCurrentLocation}
-            disabled={fetchingCurrentLocation}
-          >
-            {fetchingCurrentLocation ? (
-              <ActivityIndicator size="small" color="#3B82F6" />
-            ) : (
-              <Crosshair size={20} color="#3B82F6" />
-            )}
-          </TouchableOpacity>
-        </View>
+        {renderGooglePlacesInput('pickup')}
         
         <View style={styles.divider} />
         
-        <View style={styles.locationInputContainer}>
-          <View style={styles.iconContainer}>
-            <Navigation size={20} color="#3B82F6" />
-          </View>
-          <TextInput
-            style={styles.input}
-            placeholder="Where to?"
-            value={destination}
-            onChangeText={(text) => handleInputChange(text, 'destination')}
-            onFocus={() => {
-              setActiveField('destination');
-              if (destination.length >= 3) {
-                setShowSuggestions(true);
-                searchPlaces(destination, 'destination');
-              }
-            }}
-          />
-        </View>
+        {renderGooglePlacesInput('destination')}
       </View>
 
-      {/* Place Suggestions */}
-      {showSuggestions && (
-        <View style={styles.suggestionsContainer}>
-          {fetchingSuggestions ? (
-            <View style={styles.loadingContainer}>
-              <ActivityIndicator size="small" color="#3B82F6" />
-            </View>
-          ) : placeSuggestions.length > 0 ? (
-            <ScrollView 
-              style={styles.suggestionsList}
-              keyboardShouldPersistTaps="handled"
-            >
-              {placeSuggestions.map((suggestion) => (
-                <TouchableOpacity 
-                  key={suggestion.id} 
-                  style={styles.suggestionItem}
-                  onPress={() => handleSelectSuggestion(suggestion)}
-                >
-                  <View style={styles.suggestionIcon}>
-                    <Search size={18} color="#64748B" />
-                  </View>
-                  <View style={styles.suggestionDetails}>
-                    <Text style={styles.suggestionName}>{suggestion.name}</Text>
-                    <Text style={styles.suggestionAddress}>{suggestion.address}</Text>
-                  </View>
-                </TouchableOpacity>
-              ))}
-            </ScrollView>
-          ) : (
-            <Text style={styles.noSuggestionsText}>
-              No suggestions found. Try a different search.
-            </Text>
-          )}
-        </View>
-      )}
-
-      <View style={[styles.savedLocationsContainer, showSuggestions && styles.hidden]}>
+      <View style={[styles.savedLocationsContainer, (pickupFocused || destinationFocused) && styles.hidden]}>
         <Text style={styles.sectionTitle}>Saved Locations</Text>
         
         {loading ? (
@@ -477,7 +506,7 @@ export default function BookAutoScreen() { // Remove navigation prop
         style={[
           styles.bookButton, 
           (!pickup || !destination) && styles.bookButtonDisabled,
-          showSuggestions && styles.hidden
+          (pickupFocused || destinationFocused) && styles.hidden
         ]}
         disabled={!pickup || !destination}
         onPress={handleBookAuto}
@@ -630,11 +659,42 @@ const styles = StyleSheet.create({
   iconContainer: {
     marginRight: 12,
   },
-  input: {
+  googlePlacesContainer: {
     flex: 1,
+    zIndex: 2,
+  },
+  googlePlacesInput: {
+    height: 40,
     fontSize: 16,
     color: '#0F172A',
     fontFamily: 'Inter-Regular',
+    backgroundColor: 'transparent',
+  },
+  googlePlacesList: {
+    backgroundColor: '#fff',
+    borderRadius: 8,
+    elevation: 3,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 2,
+    position: 'absolute',
+    top: 45,
+    left: 0,
+    right: 0,
+    zIndex: 1000,
+  },
+  googlePlacesRow: {
+    padding: 13,
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  googlePlacesDescription: {
+    fontSize: 15,
+  },
+  googlePlacesSeparator: {
+    height: 1,
+    backgroundColor: '#E2E8F0',
   },
   divider: {
     height: 1,
@@ -648,29 +708,11 @@ const styles = StyleSheet.create({
     backgroundColor: '#F1F5F9',
   },
   // Suggestions styles
-  suggestionsContainer: {
-    backgroundColor: '#fff',
-    marginHorizontal: 16,
-    borderRadius: 12,
-    padding: 8,
-    maxHeight: 250,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 3,
-    elevation: 3,
-    zIndex: 2,
-  },
-  suggestionsList: {
-    flex: 1,
-  },
   suggestionItem: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingVertical: 12,
-    paddingHorizontal: 8,
-    borderBottomWidth: 1,
-    borderBottomColor: '#E2E8F0',
+    paddingVertical: 8,
+    paddingHorizontal: 4,
   },
   suggestionIcon: {
     width: 36,
@@ -693,12 +735,6 @@ const styles = StyleSheet.create({
   suggestionAddress: {
     fontSize: 14,
     color: '#64748B',
-    fontFamily: 'Inter-Regular',
-  },
-  noSuggestionsText: {
-    color: '#64748B',
-    textAlign: 'center',
-    padding: 16,
     fontFamily: 'Inter-Regular',
   },
   savedLocationsContainer: {
