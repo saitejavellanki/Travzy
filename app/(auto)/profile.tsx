@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, Image, TouchableOpacity, ScrollView, ActivityIndicator, Alert } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView, ActivityIndicator, Alert } from 'react-native';
 import { ChevronRight, Heart, CreditCard, Bell, Settings, HelpCircle, LogOut } from 'lucide-react-native';
-import { supabase } from '@/lib/supabase';
+import { auth, db, logOut } from '@/firebase/Config';
 import { router } from 'expo-router';
+import { doc, getDoc, setDoc } from 'firebase/firestore';
 
 type Profile = {
   user_id: string;
@@ -11,11 +12,10 @@ type Profile = {
   created_at: string;
 };
 
-export default function ProfileScreen() {
+export default function AutoProfileScreen() {
   const [profile, setProfile] = useState<Profile | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-
   useEffect(() => {
     fetchProfile();
   }, []);
@@ -24,36 +24,39 @@ export default function ProfileScreen() {
     try {
       setLoading(true);
       
-      // Get current session
-      const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+      // Get current user
+      const currentUser = auth.currentUser;
       
-      if (sessionError) throw sessionError;
-      
-      if (!session) {
+      if (!currentUser) {
         setError('You are not logged in');
         setLoading(false);
         return;
       }
 
-      // Get profile data
-      const { data, error: profileError } = await supabase
-        .from('profiles')
-        .select('*')
-        .eq('user_id', session.user.id)
-        .single();
+      // Get profile data from Firestore
+      const profileRef = doc(db, 'profiles', currentUser.uid);
+      const profileSnap = await getDoc(profileRef);
       
-      if (profileError) {
-        if (profileError.code === '42P01') {
-          // Table doesn't exist yet
-          setError('Profile table not set up. Please run database migration first.');
-        } else if (profileError.code === 'PGRST116') {
-          // No profile found for this user
-          setError('Profile not found. Please complete your profile setup.');
-        } else {
-          throw profileError;
-        }
+      if (profileSnap.exists()) {
+        // Transform the data to match our Profile type
+        const profileData = profileSnap.data();
+        setProfile({
+          user_id: currentUser.uid,
+          full_name: profileData.full_name || currentUser.displayName || 'User',
+          avatar_url: profileData.avatar_url,
+          created_at: profileData.created_at || new Date().toISOString(),
+        });
       } else {
-        setProfile(data);
+        // Create a basic profile if it doesn't exist
+        const newProfile = {
+          user_id: currentUser.uid,
+          full_name: currentUser.displayName || 'User',
+          avatar_url: currentUser.photoURL,
+          created_at: new Date().toISOString(),
+        };
+        
+        await setDoc(profileRef, newProfile);
+        setProfile(newProfile);
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'An error occurred');
@@ -66,8 +69,7 @@ export default function ProfileScreen() {
   const handleLogout = async () => {
     try {
       setLoading(true);
-      const { error } = await supabase.auth.signOut();
-      if (error) throw error;
+      await logOut();
       
       // Navigate to login screen
       router.replace('/login');
@@ -77,6 +79,8 @@ export default function ProfileScreen() {
       setLoading(false);
     }
   };
+
+
 
   if (loading) {
     return (
@@ -115,9 +119,11 @@ export default function ProfileScreen() {
       ) : (
         <>
           <View style={styles.profileCard}>
-            <Image
-              source={{ uri: profile?.avatar_url || 'https://i.pravatar.cc/300' }}
-              style={styles.profileImage} />
+            <View style={styles.avatarContainer}>
+              <Text style={styles.avatarText}>
+                {profile?.full_name?.charAt(0).toUpperCase() || 'U'}
+              </Text>
+            </View>
             <View style={styles.profileInfo}>
               <Text style={styles.profileName}>{profile?.full_name || 'User'}</Text>
               <Text style={styles.profilePhone}>User since {profile?.created_at ? new Date(profile.created_at).toLocaleDateString() : 'recently'}</Text>
@@ -213,7 +219,6 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     justifyContent: 'center',
     alignItems: 'center',
-    // marginTop: 16,
     width: 140,
   },
   actionButtonText: {
@@ -234,10 +239,19 @@ const styles = StyleSheet.create({
     shadowRadius: 3,
     elevation: 2,
   },
-  profileImage: {
+  avatarContainer: {
     width: 60,
     height: 60,
     borderRadius: 30,
+    backgroundColor: '#3B82F6',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  avatarText: {
+    fontSize: 24,
+    fontWeight: 'bold',
+    color: '#FFFFFF',
+    fontFamily: 'Inter-Bold',
   },
   profileInfo: {
     marginLeft: 16,

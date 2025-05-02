@@ -1,10 +1,11 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Alert, ActivityIndicator, RefreshControl } from 'react-native';
-import { Edit2, Trash2, Users, Clock, MapPin } from 'lucide-react-native';
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Alert, ActivityIndicator, RefreshControl, Modal, Image } from 'react-native';
+import { Edit2, Trash2, Users, Clock, MapPin, Check, X, DollarSign } from 'lucide-react-native';
 import { router } from 'expo-router';
 import { getAuth, onAuthStateChanged } from 'firebase/auth';
-import { getFirestore, collection, query, where, orderBy, getDocs, doc, updateDoc } from 'firebase/firestore';
+import { getFirestore, collection, query, where, orderBy, getDocs, doc, updateDoc, getDoc } from 'firebase/firestore';
 import { app } from '../../firebase/Config'; // Import the Firebase app from your config file
+import QRCode from 'react-native-qrcode-svg'; // You'll need to install this package
 
 // Initialize Firebase Auth and Firestore
 const auth = getAuth(app);
@@ -23,11 +24,26 @@ interface Ride {
   vehicle_name?: string;
 }
 
+// Define Passenger Request type
+interface PassengerRequest {
+  id: string;
+  ride_id: string;
+  passenger_id: string;
+  status: 'pending' | 'accepted' | 'rejected' | 'completed' | 'paid';
+  seats_requested: number;
+  passenger_name?: string;
+  passenger_phone?: string;
+}
+
 export default function RidesScreen(): JSX.Element {
   const [userRides, setUserRides] = useState<Ride[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
   const [refreshing, setRefreshing] = useState<boolean>(false);
   const [userId, setUserId] = useState<string | null>(null);
+  const [passengerRequests, setPassengerRequests] = useState<Record<string, PassengerRequest[]>>({});
+  const [selectedRide, setSelectedRide] = useState<Ride | null>(null);
+  const [qrModalVisible, setQrModalVisible] = useState<boolean>(false);
+  const [selectedPassenger, setSelectedPassenger] = useState<PassengerRequest | null>(null);
 
   useEffect(() => {
     getUserSession();
@@ -77,12 +93,72 @@ export default function RidesScreen(): JSX.Element {
       });
       
       setUserRides(rides);
+      
+      // Fetch passenger requests for each ride
+      const requestsMap: Record<string, PassengerRequest[]> = {};
+      await Promise.all(rides.map(async (ride) => {
+        const requests = await fetchPassengerRequests(ride.id);
+        requestsMap[ride.id] = requests;
+      }));
+      
+      setPassengerRequests(requestsMap);
     } catch (error) {
       console.error('Error fetching user rides:', error);
       Alert.alert('Error', 'Failed to load your rides');
     } finally {
       setLoading(false);
       setRefreshing(false);
+    }
+  };
+
+  const fetchPassengerRequests = async (rideId: string): Promise<PassengerRequest[]> => {
+    try {
+      const requestsQuery = query(
+        collection(db, 'ride_requests'),
+        where('ride_id', '==', rideId)
+      );
+      
+      const requestsSnapshot = await getDocs(requestsQuery);
+      
+      if (requestsSnapshot.empty) {
+        return [];
+      }
+      
+      const requests: PassengerRequest[] = [];
+      
+      for (const doc of requestsSnapshot.docs) {
+        const requestData = doc.data() as PassengerRequest;
+        
+        // Fetch passenger profile to get name and phone
+        if (requestData.passenger_id) {
+          try {
+            const profileQuery = query(
+              collection(db, 'profiles'),
+              where('user_id', '==', requestData.passenger_id)
+            );
+            
+            const profileSnapshot = await getDocs(profileQuery);
+            
+            if (!profileSnapshot.empty) {
+              const profileData = profileSnapshot.docs[0].data();
+              requestData.passenger_name = profileData.fullName || 'Unknown';
+              requestData.passenger_phone = profileData.phoneNumber || 'N/A';
+            }
+          } catch (err) {
+            console.error('Error fetching passenger profile:', err);
+          }
+        }
+        
+        requests.push({
+          id: doc.id,
+          ...requestData
+        });
+      }
+      
+      return requests;
+    } catch (error) {
+      console.error('Error fetching passenger requests:', error);
+      return [];
     }
   };
 
@@ -169,6 +245,15 @@ export default function RidesScreen(): JSX.Element {
         status: 'cancelled'
       });
       
+      // Also update any associated ride requests to rejected
+      const requests = passengerRequests[rideId] || [];
+      await Promise.all(requests.map(async (request) => {
+        const requestRef = doc(db, 'ride_requests', request.id);
+        await updateDoc(requestRef, {
+          status: 'rejected'
+        });
+      }));
+      
       Alert.alert('Success', 'Ride cancelled successfully');
       if (userId) {
         fetchUserRides(userId);
@@ -178,6 +263,116 @@ export default function RidesScreen(): JSX.Element {
       Alert.alert('Error', 'Failed to cancel ride');
       setLoading(false);
     }
+  };
+
+  const handleCompleteRide = (ride: Ride): void => {
+    setSelectedRide(ride);
+    
+    // Get accepted requests for this ride
+    const requests = (passengerRequests[ride.id] || [])
+      .filter(req => req.status === 'accepted');
+    
+    if (requests.length === 0) {
+      Alert.alert(
+        'Complete Ride',
+        'No passengers have been accepted for this ride. Do you still want to mark it as completed?',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          { 
+            text: 'Complete Ride', 
+            onPress: () => completeRide(ride.id)
+          }
+        ]
+      );
+    } else {
+      Alert.alert(
+        'Complete Ride',
+        `You have ${requests.length} accepted passenger(s). Mark this ride as completed?`,
+        [
+          { text: 'Cancel', style: 'cancel' },
+          { 
+            text: 'Complete Ride', 
+            onPress: () => completeRide(ride.id)
+          }
+        ]
+      );
+    }
+  };
+
+  const completeRide = async (rideId: string): Promise<void> => {
+    try {
+      setLoading(true);
+      
+      // Update ride status
+      const rideRef = doc(db, 'rides', rideId);
+      await updateDoc(rideRef, {
+        status: 'completed'
+      });
+      
+      // Update all accepted requests to completed status
+      const requests = (passengerRequests[rideId] || [])
+        .filter(req => req.status === 'accepted');
+      
+      await Promise.all(requests.map(async (request) => {
+        const requestRef = doc(db, 'ride_requests', request.id);
+        await updateDoc(requestRef, {
+          status: 'completed'
+        });
+      }));
+      
+      Alert.alert('Success', 'Ride marked as completed successfully');
+      if (userId) {
+        fetchUserRides(userId);
+      }
+    } catch (error) {
+      console.error('Error completing ride:', error);
+      Alert.alert('Error', 'Failed to complete ride');
+      setLoading(false);
+    }
+  };
+
+  const generatePaymentQR = (ride: Ride, passenger: PassengerRequest) => {
+    setSelectedRide(ride);
+    setSelectedPassenger(passenger);
+    setQrModalVisible(true);
+  };
+
+  const markAsPaid = async (passengerId: string, rideId: string, requestId: string) => {
+    try {
+      // Update the ride request status to paid
+      const requestRef = doc(db, 'ride_requests', requestId);
+      await updateDoc(requestRef, {
+        status: 'paid'
+      });
+      
+      Alert.alert('Success', 'Passenger marked as paid');
+      setQrModalVisible(false);
+      
+      if (userId) {
+        fetchUserRides(userId);
+      }
+    } catch (error) {
+      console.error('Error marking as paid:', error);
+      Alert.alert('Error', 'Failed to update payment status');
+    }
+  };
+
+  const createPaymentData = (ride: Ride, passenger: PassengerRequest) => {
+    const totalAmount = ride.price * passenger.seats_requested;
+    
+    // Create payment data object
+    const paymentData = {
+      rideId: ride.id,
+      passengerId: passenger.passenger_id,
+      requestId: passenger.id,
+      amount: totalAmount,
+      driverId: ride.driver_id,
+      timestamp: new Date().toISOString(),
+      pickup: ride.pickup_location,
+      dropoff: ride.dropoff_location
+    };
+    
+    return JSON.stringify(paymentData);
   };
 
   if (loading) {
@@ -203,17 +398,22 @@ export default function RidesScreen(): JSX.Element {
           <View style={styles.emptyContainer}>
             <Text style={styles.emptyText}>You haven't offered any rides yet</Text>
             <TouchableOpacity 
-                    style={styles.offerButton}
-                    onPress={() => router.push('/offer-ride')}
-                  >
-                    <Text style={styles.offerButtonText}>Offer a Ride</Text>
-                  </TouchableOpacity>
+              style={styles.offerButton}
+              onPress={() => router.push('/components/offer-ride')}
+            >
+              <Text style={styles.offerButtonText}>Offer a Ride</Text>
+            </TouchableOpacity>
           </View>
         ) : (
           userRides.map((ride) => (
             <View key={ride.id} style={styles.rideCard}>
               <View style={styles.cardHeader}>
-                <Text style={styles.rideStatus}>
+                <Text style={[
+                  styles.rideStatus,
+                  ride.status === 'active' ? styles.statusActive :
+                  ride.status === 'completed' ? styles.statusCompleted :
+                  styles.statusCancelled
+                ]}>
                   {ride.status === 'active' ? '🟢 Active' : 
                    ride.status === 'completed' ? '✅ Completed' : '❌ Cancelled'}
                 </Text>
@@ -249,6 +449,46 @@ export default function RidesScreen(): JSX.Element {
                 </View>
               </View>
               
+              {/* Show passenger requests for active or completed rides */}
+              {(ride.status === 'active' || ride.status === 'completed') && 
+                passengerRequests[ride.id] && 
+                passengerRequests[ride.id].length > 0 && (
+                <View style={styles.passengersSection}>
+                  <Text style={styles.passengersSectionTitle}>Passengers</Text>
+                  
+                  {passengerRequests[ride.id]
+                    .filter(req => ['accepted', 'completed', 'paid'].includes(req.status))
+                    .map(request => (
+                    <View key={request.id} style={styles.passengerItem}>
+                      <View style={styles.passengerInfo}>
+                        <Text style={styles.passengerName}>{request.passenger_name}</Text>
+                        <Text style={styles.passengerSeats}>{request.seats_requested} seat(s)</Text>
+                        <Text style={styles.passengerPhone}>{request.passenger_phone}</Text>
+                      </View>
+                      
+                      <View style={styles.passengerActions}>
+                        {ride.status === 'completed' && request.status !== 'paid' && (
+                          <TouchableOpacity 
+                            style={styles.qrButton}
+                            onPress={() => generatePaymentQR(ride, request)}
+                          >
+                            <DollarSign size={16} color="#3B82F6" />
+                            <Text style={styles.qrButtonText}>Payment QR</Text>
+                          </TouchableOpacity>
+                        )}
+                        
+                        {request.status === 'paid' && (
+                          <View style={styles.paidBadge}>
+                            <Check size={16} color="#fff" />
+                            <Text style={styles.paidBadgeText}>Paid</Text>
+                          </View>
+                        )}
+                      </View>
+                    </View>
+                  ))}
+                </View>
+              )}
+              
               {ride.status === 'active' && (
                 <View style={styles.actions}>
                   <TouchableOpacity 
@@ -258,12 +498,21 @@ export default function RidesScreen(): JSX.Element {
                     <Edit2 size={16} color="#3B82F6" />
                     <Text style={styles.actionText}>Update Seats</Text>
                   </TouchableOpacity>
+                  
+                  <TouchableOpacity 
+                    style={[styles.actionButton, styles.completeButton]}
+                    onPress={() => handleCompleteRide(ride)}
+                  >
+                    <Check size={16} color="#10B981" />
+                    <Text style={styles.completeText}>Complete</Text>
+                  </TouchableOpacity>
+                  
                   <TouchableOpacity 
                     style={[styles.actionButton, styles.cancelButton]}
                     onPress={() => handleCancelRide(ride.id)}
                   >
                     <Trash2 size={16} color="#EF4444" />
-                    <Text style={styles.cancelText}>Cancel Ride</Text>
+                    <Text style={styles.cancelText}>Cancel</Text>
                   </TouchableOpacity>
                 </View>
               )}
@@ -271,6 +520,65 @@ export default function RidesScreen(): JSX.Element {
           ))
         )}
       </ScrollView>
+      
+      {/* Payment QR Code Modal */}
+      <Modal
+        visible={qrModalVisible}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={() => setQrModalVisible(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.qrModalContent}>
+            <Text style={styles.qrModalTitle}>Payment QR Code</Text>
+            
+            {selectedRide && selectedPassenger && (
+              <>
+                <View style={styles.qrInfo}>
+                  <Text style={styles.qrPassengerName}>Passenger: {selectedPassenger.passenger_name}</Text>
+                  <Text style={styles.qrAmount}>
+                    Amount: ${selectedRide.price * selectedPassenger.seats_requested}
+                  </Text>
+                  <Text style={styles.qrSeats}>{selectedPassenger.seats_requested} seat(s)</Text>
+                </View>
+                
+                <View style={styles.qrCodeContainer}>
+                  <QRCode
+                    value={createPaymentData(selectedRide, selectedPassenger)}
+                    size={200}
+                    color="#1E293B"
+                    backgroundColor="#fff"
+                  />
+                </View>
+                
+                <Text style={styles.qrInstructions}>
+                  Ask the passenger to scan this QR code to complete payment.
+                </Text>
+                
+                <View style={styles.qrButtons}>
+                  <TouchableOpacity
+                    style={styles.qrCloseButton}
+                    onPress={() => setQrModalVisible(false)}
+                  >
+                    <Text style={styles.qrCloseButtonText}>Close</Text>
+                  </TouchableOpacity>
+                  
+                  <TouchableOpacity
+                    style={styles.markPaidButton}
+                    onPress={() => markAsPaid(
+                      selectedPassenger.passenger_id,
+                      selectedRide.id,
+                      selectedPassenger.id
+                    )}
+                  >
+                    <Text style={styles.markPaidButtonText}>Mark as Paid</Text>
+                  </TouchableOpacity>
+                </View>
+              </>
+            )}
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -347,6 +655,15 @@ const styles = StyleSheet.create({
     fontFamily: 'Inter-SemiBold',
     color: '#1E293B',
   },
+  statusActive: {
+    color: '#16A34A',
+  },
+  statusCompleted: {
+    color: '#3B82F6',
+  },
+  statusCancelled: {
+    color: '#DC2626',
+  },
   price: {
     fontSize: 18,
     color: '#3B82F6',
@@ -389,6 +706,76 @@ const styles = StyleSheet.create({
     color: '#64748B',
     fontFamily: 'Inter-Regular',
   },
+  passengersSection: {
+    padding: 16,
+    borderTopWidth: 1,
+    borderTopColor: '#E2E8F0',
+  },
+  passengersSectionTitle: {
+    fontSize: 16,
+    color: '#1E293B',
+    fontFamily: 'Inter-SemiBold',
+    marginBottom: 12,
+  },
+  passengerItem: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E2E8F0',
+  },
+  passengerInfo: {
+    flex: 1,
+  },
+  passengerName: {
+    fontSize: 14,
+    color: '#1E293B',
+    fontFamily: 'Inter-Medium',
+  },
+  passengerSeats: {
+    fontSize: 13,
+    color: '#64748B',
+    fontFamily: 'Inter-Regular',
+  },
+  passengerPhone: {
+    fontSize: 13,
+    color: '#64748B',
+    fontFamily: 'Inter-Regular',
+    marginTop: 2,
+  },
+  passengerActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  qrButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#EFF6FF',
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+  },
+  qrButtonText: {
+    marginLeft: 4,
+    fontSize: 12,
+    color: '#3B82F6',
+    fontFamily: 'Inter-Medium',
+  },
+  paidBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#10B981',
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+  },
+  paidBadgeText: {
+    marginLeft: 4,
+    fontSize: 12,
+    color: '#fff',
+    fontFamily: 'Inter-Medium',
+  },
   actions: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -401,16 +788,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     paddingVertical: 8,
-    paddingHorizontal: 16,
+    paddingHorizontal: 10,
     borderRadius: 8,
     backgroundColor: '#EFF6FF',
     flex: 1,
     marginRight: 8,
-  },
-  cancelButton: {
-    backgroundColor: '#FEE2E2',
-    marginRight: 0,
-    marginLeft: 8,
   },
   actionText: {
     marginLeft: 6,
@@ -418,10 +800,118 @@ const styles = StyleSheet.create({
     color: '#3B82F6',
     fontFamily: 'Inter-Medium',
   },
+  completeButton: {
+    backgroundColor: '#DCFCE7',
+    marginRight: 8,
+  },
+  completeText: {
+    marginLeft: 6,
+    fontSize: 14,
+    color: '#10B981',
+    fontFamily: 'Inter-Medium',
+  },
+  cancelButton: {
+    backgroundColor: '#FEE2E2',
+    marginRight: 0,
+  },
   cancelText: {
     marginLeft: 6,
     fontSize: 14,
     color: '#EF4444',
+    fontFamily: 'Inter-Medium',
+  },
+  // Modal styles
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.6)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  qrModalContent: {
+    width: '85%',
+    backgroundColor: 'white',
+    borderRadius: 16,
+    padding: 24,
+    alignItems: 'center',
+    elevation: 5,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 3.84,
+  },
+  qrModalTitle: {
+    fontSize: 20,
+    fontFamily: 'Inter-Bold',
+    color: '#1E293B',
+    marginBottom: 16,
+  },
+  qrInfo: {
+    width: '100%',
+    alignItems: 'center',
+    marginBottom: 20,
+  },
+  qrPassengerName: {
+    fontSize: 16,
+    fontFamily: 'Inter-Medium',
+    color: '#1E293B',
+    marginBottom: 4,
+  },
+  qrAmount: {
+    fontSize: 20,
+    fontFamily: 'Inter-Bold',
+    color: '#3B82F6',
+    marginBottom: 4,
+  },
+  qrSeats: {
+    fontSize: 14,
+    fontFamily: 'Inter-Regular',
+    color: '#64748B',
+  },
+  qrCodeContainer: {
+    padding: 16,
+    backgroundColor: '#fff',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    marginBottom: 16,
+  },
+  qrInstructions: {
+    fontSize: 14,
+    fontFamily: 'Inter-Regular',
+    color: '#64748B',
+    textAlign: 'center',
+    marginBottom: 24,
+  },
+  qrButtons: {
+    flexDirection: 'row',
+    width: '100%',
+    justifyContent: 'space-between',
+  },
+  qrCloseButton: {
+    paddingVertical: 12,
+    paddingHorizontal: 20,
+    backgroundColor: '#F1F5F9',
+    borderRadius: 8,
+    flex: 1,
+    marginRight: 8,
+    alignItems: 'center',
+  },
+  qrCloseButtonText: {
+    color: '#64748B',
+    fontSize: 16,
+    fontFamily: 'Inter-Medium',
+  },
+  markPaidButton: {
+    paddingVertical: 12,
+    paddingHorizontal: 20,
+    backgroundColor: '#10B981',
+    borderRadius: 8,
+    flex: 1,
+    alignItems: 'center',
+  },
+  markPaidButtonText: {
+    color: '#fff',
+    fontSize: 16,
     fontFamily: 'Inter-Medium',
   },
 });
