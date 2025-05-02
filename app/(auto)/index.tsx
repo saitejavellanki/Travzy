@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { View, Text, StyleSheet, TextInput, TouchableOpacity, ScrollView, ActivityIndicator, Modal, Image, Keyboard } from 'react-native';
-import { MapPin, Navigation, ChevronRight, X, Crosshair, Search } from 'lucide-react-native';
+import { View, Text, StyleSheet, TextInput, TouchableOpacity, ScrollView, ActivityIndicator, Modal, Image, Keyboard, Alert } from 'react-native';
+import { MapPin, Navigation, ChevronRight, X, Crosshair, Search, XCircle } from 'lucide-react-native';
 import { auth, db } from '../../firebase/Config';
 import { collection, getDocs, query, where } from 'firebase/firestore';
 import * as Location from 'expo-location';
@@ -8,9 +8,10 @@ import { router } from 'expo-router';
 import { GooglePlacesAutocomplete } from 'react-native-google-places-autocomplete';
 import 'react-native-get-random-values';
 import { v4 as uuidv4 } from 'uuid';
+import { GOOGLE_API } from '../apiKeys';
 
 // Add your Google API key here
-const GOOGLE_PLACES_API_KEY = 'AIzaSyChXhoyNAhI2th0bDnlCDXAwpz1erwBPo8';
+const GOOGLE_PLACES_API_KEY = GOOGLE_API;
 const newId = uuidv4();
 
 // VIT-AP University coordinates and address
@@ -24,6 +25,9 @@ const VIT_AP_LOCATION = {
     }
   }
 };
+
+// Maximum allowed distance (in km)
+const MAX_DISTANCE_KM = 60;
 
 export default function BookAutoScreen() {
   const [pickup, setPickup] = useState(VIT_AP_LOCATION.description);
@@ -109,6 +113,17 @@ export default function BookAutoScreen() {
   };
 
   const handleSelectSavedLocation = (location, type) => {
+    // For both pickup and destination, check if it's within range before setting
+    const distance = calculateHaversineDistance(
+      { latitude: VIT_AP_LOCATION.geometry.location.lat, longitude: VIT_AP_LOCATION.geometry.location.lng },
+      { latitude: location.latitude || 0, longitude: location.longitude || 0 }
+    );
+    
+    if (distance > MAX_DISTANCE_KM) {
+      showDistanceAlert(type);
+      return;
+    }
+    
     if (type === 'pickup') {
       setPickup(location.address);
       setPickupDetails({
@@ -141,7 +156,6 @@ export default function BookAutoScreen() {
       }
     }
   };
-  
   // Get current location for pickup
   const getCurrentLocation = async () => {
     if (!locationPermission) {
@@ -160,6 +174,20 @@ export default function BookAutoScreen() {
       const location = await Location.getCurrentPositionAsync({
         accuracy: Location.Accuracy.High
       });
+      
+      // Check if the location is within 60KM radius of VIT-AP
+      const distance = calculateHaversineDistance(
+        { latitude: VIT_AP_LOCATION.geometry.location.lat, longitude: VIT_AP_LOCATION.geometry.location.lng },
+        { latitude: location.coords.latitude, longitude: location.coords.longitude }
+      );
+      
+      if (distance > MAX_DISTANCE_KM) {
+        // First stop the loading indicator
+        setFetchingCurrentLocation(false);
+        // Then show the alert with isCurrentLocation flag set to true
+        showDistanceAlert('pickup', true);
+        return;
+      }
       
       // Reverse geocode to get address
       const addresses = await Location.reverseGeocodeAsync({
@@ -191,8 +219,66 @@ export default function BookAutoScreen() {
     } catch (err) {
       console.error('Error getting current location:', err);
       alert('Could not get your current location');
+      
+      // Reset to VIT-AP if there's an error
+      setPickup(VIT_AP_LOCATION.description);
+      setPickupDetails(VIT_AP_LOCATION);
+      if (pickupRef.current) {
+        pickupRef.current.setAddressText(VIT_AP_LOCATION.description);
+      }
     } finally {
       setFetchingCurrentLocation(false);
+    }
+  };
+
+
+  // Function to show distance limit alert
+ // Function to show distance limit alert
+const showDistanceAlert = (type, isCurrentLocation = false) => {
+  Alert.alert(
+    "Distance Limit Exceeded",
+    `Please select a ${type} within 60km of VIT-AP University.`,
+    [
+      { 
+        text: "OK", 
+        onPress: () => {
+          // For current location button or pickup selection beyond range, reset to VIT-AP
+          if (type === 'pickup') {
+            setPickup(VIT_AP_LOCATION.description);
+            setPickupDetails(VIT_AP_LOCATION);
+            if (pickupRef.current) {
+              pickupRef.current.setAddressText(VIT_AP_LOCATION.description);
+            }
+          } 
+          // For destination, clear the field
+          else {
+            setDestination('');
+            setDestinationDetails(null);
+            if (destinationRef.current) {
+              destinationRef.current.setAddressText('');
+            }
+          }
+        }
+      }
+    ]
+  );
+};
+  // Clear input fields
+  const clearField = (type) => {
+    if (type === 'pickup') {
+      // Instead of resetting to VIT-AP, just clear the field
+      setPickup('');
+      setPickupDetails(null);
+      if (pickupRef.current) {
+        pickupRef.current.setAddressText('');
+      }
+    } else {
+      // For destination, keep existing clear logic
+      setDestination('');
+      setDestinationDetails(null);
+      if (destinationRef.current) {
+        destinationRef.current.setAddressText('');
+      }
     }
   };
   
@@ -248,6 +334,18 @@ export default function BookAutoScreen() {
     const distance = R * c; // Distance in km
     
     return distance;
+  };
+  
+  // Check if location is within 60km radius of VIT-AP
+  const isWithinMaxDistance = (details) => {
+    if (!details || !details.geometry || !details.geometry.location) return false;
+    
+    const distance = calculateHaversineDistance(
+      { latitude: VIT_AP_LOCATION.geometry.location.lat, longitude: VIT_AP_LOCATION.geometry.location.lng },
+      { latitude: details.geometry.location.lat, longitude: details.geometry.location.lng }
+    );
+    
+    return distance <= MAX_DISTANCE_KM;
   };
   
   // Calculate estimated travel time (simple approximation)
@@ -343,14 +441,16 @@ export default function BookAutoScreen() {
     setDestinationFocused(false);
   };
 
-useEffect(() => {
-  // Set VIT-AP as default pickup on component mount
-  if (pickupRef.current && pickup === VIT_AP_LOCATION.description) {
-    setTimeout(() => {
-      pickupRef.current.setAddressText(VIT_AP_LOCATION.description);
-    }, 100); // Small delay to ensure ref is ready
-  }
-}, []);
+  useEffect(() => {
+    // Set VIT-AP as default pickup on component mount only
+    if (pickupRef.current) {
+      setPickup(VIT_AP_LOCATION.description);
+      setPickupDetails(VIT_AP_LOCATION);
+      setTimeout(() => {
+        pickupRef.current.setAddressText(VIT_AP_LOCATION.description);
+      }, 100); // Small delay to ensure ref is ready
+    }
+  }, []);
 
 //useEffect to handle changes to pickup/destination state
 useEffect(() => {
@@ -364,6 +464,7 @@ useEffect(() => {
     destinationRef.current.setAddressText(destination);
   }
 }, [destination]);
+
 //google places handling
 const renderGooglePlacesInput = (type) => {
   const isPickup = type === 'pickup';
@@ -383,9 +484,21 @@ const renderGooglePlacesInput = (type) => {
         minLength={2}
         onPress={(data, details = null) => {
           if (isPickup) {
+            // Apply distance check for pickup as well
+            if (details && !isWithinMaxDistance(details)) {
+              showDistanceAlert('pickup');
+              return;
+            }
+            
             setPickup(data.description);
             setPickupDetails(details || data);
           } else {
+            // For destination, check if it's within the maximum distance
+            if (details && !isWithinMaxDistance(details)) {
+              showDistanceAlert('destination');
+              return;
+            }
+            
             setDestination(data.description);
             setDestinationDetails(details || data);
           }
@@ -427,17 +540,34 @@ const renderGooglePlacesInput = (type) => {
         debounce={400}
         onFail={(error) => console.error("Google Places Error:", error)}
       />
-      {isPickup && (
+      
+      {isPickup ? (
+        <View style={styles.inputButtonsContainer}>
+          <TouchableOpacity 
+            style={styles.currentLocationBtn}
+            onPress={getCurrentLocation}
+            disabled={fetchingCurrentLocation}
+          >
+            {fetchingCurrentLocation ? (
+              <ActivityIndicator size="small" color="#3B82F6" />
+            ) : (
+              <Crosshair size={20} color="#3B82F6" />
+            )}
+          </TouchableOpacity>
+          
+          <TouchableOpacity 
+            style={styles.clearFieldBtn}
+            onPress={() => clearField('pickup')}
+          >
+            <XCircle size={20} color="#64748B" />
+          </TouchableOpacity>
+        </View>
+      ) : (
         <TouchableOpacity 
-          style={styles.currentLocationBtn}
-          onPress={getCurrentLocation}
-          disabled={fetchingCurrentLocation}
+          style={styles.clearFieldBtn}
+          onPress={() => clearField('destination')}
         >
-          {fetchingCurrentLocation ? (
-            <ActivityIndicator size="small" color="#3B82F6" />
-          ) : (
-            <Crosshair size={20} color="#3B82F6" />
-          )}
+          <XCircle size={20} color="#64748B" />
         </TouchableOpacity>
       )}
     </View>
@@ -702,7 +832,17 @@ const styles = StyleSheet.create({
     marginVertical: 8,
     marginLeft: 32,
   },
+  inputButtonsContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
   currentLocationBtn: {
+    padding: 8,
+    borderRadius: 20,
+    backgroundColor: '#F1F5F9',
+    marginRight: 8,
+  },
+  clearFieldBtn: {
     padding: 8,
     borderRadius: 20,
     backgroundColor: '#F1F5F9',
@@ -738,22 +878,27 @@ const styles = StyleSheet.create({
     fontFamily: 'Inter-Regular',
   },
   savedLocationsContainer: {
-    flex: 1,
-    backgroundColor: '#fff',
     margin: 16,
+    marginTop: 0,
+    backgroundColor: '#fff',
     borderRadius: 12,
     padding: 16,
-    zIndex: 0,
-  },
-  savedLocations: {
-    flex: 1,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 3,
+    elevation: 2,
+    maxHeight: '45%',
   },
   sectionTitle: {
-    fontSize: 16,
+    fontSize: 18,
     fontWeight: '600',
-    marginBottom: 16,
     color: '#0F172A',
+    marginBottom: 12,
     fontFamily: 'Inter-SemiBold',
+  },
+  savedLocations: {
+    maxHeight: 300,
   },
   savedLocationItem: {
     flexDirection: 'row',
@@ -787,11 +932,15 @@ const styles = StyleSheet.create({
   },
   bookButton: {
     backgroundColor: '#3B82F6',
-    margin: 16,
-    padding: 16,
     borderRadius: 12,
+    padding: 16,
+    margin: 16,
     alignItems: 'center',
-    zIndex: 0,
+    justifyContent: 'center',
+    position: 'absolute',
+    bottom: 16,
+    left: 0,
+    right: 0,
   },
   bookButtonDisabled: {
     backgroundColor: '#94A3B8',
@@ -805,18 +954,20 @@ const styles = StyleSheet.create({
   loadingContainer: {
     padding: 20,
     alignItems: 'center',
+    justifyContent: 'center',
   },
   errorText: {
-    color: '#DC2626',
-    textAlign: 'center',
-    padding: 10,
+    color: '#EF4444',
+    fontSize: 14,
     fontFamily: 'Inter-Regular',
+    marginVertical: 10,
   },
   noLocationsText: {
     color: '#64748B',
-    textAlign: 'center',
-    padding: 20,
+    fontSize: 14,
     fontFamily: 'Inter-Regular',
+    marginVertical: 10,
+    textAlign: 'center',
   },
   hidden: {
     display: 'none',
@@ -825,71 +976,71 @@ const styles = StyleSheet.create({
   modalContainer: {
     flex: 1,
     justifyContent: 'flex-end',
-    backgroundColor: 'rgba(0,0,0,0.5)',
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
   },
   modalContent: {
-    backgroundColor: '#FFFFFF',
-    borderTopLeftRadius: 24,
-    borderTopRightRadius: 24,
+    backgroundColor: '#fff',
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
     padding: 20,
-    maxHeight: '75%',
+    maxHeight: '80%',
   },
   modalHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    paddingBottom: 16,
-    borderBottomWidth: 1,
-    borderBottomColor: '#E2E8F0',
-    marginBottom: 16,
+    marginBottom: 20,
   },
   modalTitle: {
-    fontSize: 18,
-    fontFamily: 'Inter-SemiBold',
+    fontSize: 20,
+    fontWeight: 'bold',
     color: '#0F172A',
+    fontFamily: 'Inter-Bold',
   },
   calculatingText: {
-    marginTop: 16,
+    marginTop: 10,
     fontSize: 16,
-    fontFamily: 'Inter-Medium',
     color: '#64748B',
+    fontFamily: 'Inter-Regular',
   },
   rideDetails: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
     backgroundColor: '#F1F5F9',
     borderRadius: 12,
     padding: 16,
-    marginBottom: 16,
+    marginBottom: 20,
   },
   detailItem: {
+    flex: 1,
     alignItems: 'center',
   },
   detailLabel: {
     fontSize: 14,
     color: '#64748B',
-    fontFamily: 'Inter-Regular',
     marginBottom: 4,
+    fontFamily: 'Inter-Regular',
   },
   detailValue: {
-    fontSize: 18,
+    fontSize: 16,
+    fontWeight: '600',
     color: '#0F172A',
     fontFamily: 'Inter-SemiBold',
   },
   optionsTitle: {
     fontSize: 16,
-    fontFamily: 'Inter-Medium',
+    fontWeight: '600',
     color: '#0F172A',
     marginBottom: 12,
+    fontFamily: 'Inter-SemiBold',
   },
   rideOption: {
     flexDirection: 'row',
-    alignItems: 'center',
     justifyContent: 'space-between',
-    padding: 12,
+    alignItems: 'center',
     borderWidth: 1,
     borderColor: '#E2E8F0',
     borderRadius: 12,
+    padding: 12,
     marginBottom: 12,
   },
   selectedRideOption: {
@@ -902,8 +1053,8 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   rideImageContainer: {
-    width: 64,
-    height: 64,
+    width: 60,
+    height: 60,
     borderRadius: 8,
     overflow: 'hidden',
     marginRight: 12,
@@ -917,31 +1068,33 @@ const styles = StyleSheet.create({
   },
   rideType: {
     fontSize: 16,
-    fontFamily: 'Inter-SemiBold',
+    fontWeight: '600',
     color: '#0F172A',
-    marginBottom: 4,
+    fontFamily: 'Inter-SemiBold',
   },
   rideDesc: {
     fontSize: 14,
-    fontFamily: 'Inter-Regular',
     color: '#64748B',
+    fontFamily: 'Inter-Regular',
   },
   ridePrice: {
     fontSize: 18,
+    fontWeight: 'bold',
+    color: '#0F172A',
     fontFamily: 'Inter-Bold',
-    color: '#3B82F6',
   },
   confirmButton: {
     backgroundColor: '#3B82F6',
     borderRadius: 12,
     padding: 16,
     alignItems: 'center',
-    marginTop: 16,
+    justifyContent: 'center',
+    marginTop: 10,
   },
   confirmButtonText: {
-    color: '#FFFFFF',
+    color: '#fff',
     fontSize: 16,
+    fontWeight: '600',
     fontFamily: 'Inter-SemiBold',
-    textTransform: 'capitalize',
   },
 });
