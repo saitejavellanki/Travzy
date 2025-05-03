@@ -5,16 +5,85 @@ import { HomeIcon as Home, Car, MessageSquare, User } from 'lucide-react-native'
 import { useRouter } from 'expo-router';
 import { useMode } from '../components/mode/ModeContext';
 import { TouchableOpacity } from 'react-native';
+import { useEffect, useState } from 'react';
+import { auth, db } from '../../firebase/Config';
+import { collection, query, where, getDocs, onSnapshot } from 'firebase/firestore';
 
 export default function AppLayout() {
   const router = useRouter();
   const { currentMode, setCurrentMode } = useMode();
+  const [pendingRequestsCount, setPendingRequestsCount] = useState(0);
 
   const handleSwitchMode = () => {
     const newMode = currentMode === 'p2p' ? 'auto' : 'p2p';
     setCurrentMode(newMode);
     router.replace(`/(${newMode})`);
   };
+
+  // Monitor pending ride requests for the current user
+  useEffect(() => {
+    const currentUser = auth.currentUser;
+    if (!currentUser) return;
+
+    const userId = currentUser.uid;
+    
+    // Set up listener for ride requests
+    const setupRequestsListener = async () => {
+      try {
+        // First get the driver's rides
+        const ridesQuery = query(
+          collection(db, 'rides'),
+          where('driver_id', '==', userId),
+          where('status', '==', 'active')
+        );
+        
+        const ridesSnapshot = await getDocs(ridesQuery);
+        
+        if (ridesSnapshot.empty) {
+          setPendingRequestsCount(0);
+          return;
+        }
+        
+        // Get all ride IDs
+        const rideIds = [];
+        ridesSnapshot.forEach((doc) => {
+          rideIds.push(doc.id);
+        });
+        
+        // If no rides, exit
+        if (rideIds.length === 0) {
+          setPendingRequestsCount(0);
+          return;
+        }
+        
+        // Listen for pending requests for any of the driver's rides
+        const requestsQuery = query(
+          collection(db, 'ride_requests'),
+          where('ride_id', 'in', rideIds),
+          where('status', '==', 'pending')
+        );
+        
+        const unsubscribe = onSnapshot(requestsQuery, (snapshot) => {
+          setPendingRequestsCount(snapshot.docs.length);
+        }, (error) => {
+          console.error('Error listening to ride requests:', error);
+        });
+        
+        return unsubscribe;
+      } catch (error) {
+        console.error('Error setting up ride requests listener:', error);
+      }
+    };
+    
+    const unsubscribe = setupRequestsListener();
+    
+    return () => {
+      // Clean up the listener when component unmounts
+      if (unsubscribe && typeof unsubscribe === 'function') {
+        unsubscribe();
+      }
+    };
+  }, []);
 
   return (
     <Tabs
@@ -87,7 +156,14 @@ export default function AppLayout() {
         name="chat"
         options={{
           title: 'Messages',
-          tabBarIcon: ({ color, size }) => <MessageSquare size={size} color={color} />,
+          tabBarIcon: ({ color, size }) => (
+            <View>
+              <MessageSquare size={size} color={color} />
+              {pendingRequestsCount > 0 && (
+                <View style={styles.notificationDot} />
+              )}
+            </View>
+          ),
         }}
       />
       <Tabs.Screen
@@ -142,5 +218,16 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 1 },
     shadowOpacity: 0.2,
     shadowRadius: 1,
+  },
+  notificationDot: {
+    position: 'absolute',
+    right: -2,
+    top: -2,
+    backgroundColor: '#EF4444', // Red notification dot
+    borderRadius: 6,
+    width: 8,
+    height: 8,
+    borderWidth: 1,
+    borderColor: '#FFFFFF',
   },
 });

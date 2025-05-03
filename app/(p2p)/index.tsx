@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Image, ActivityIndicator, RefreshControl, TextInput, Modal, FlatList } from 'react-native';
-import { Search, MapPin, Clock, Users, Check, Phone, ChevronDown } from 'lucide-react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Image, ActivityIndicator, RefreshControl, Modal, FlatList } from 'react-native';
+import { Search, MapPin, Clock, Users, Check, Phone, ChevronDown, Star } from 'lucide-react-native';
 import { router } from 'expo-router';
 import { 
   getAuth, 
@@ -13,7 +13,9 @@ import {
   where, 
   getDocs, 
   orderBy, 
-  limit 
+  limit,
+  doc,
+  getDoc
 } from 'firebase/firestore';
 import { initializeApp } from 'firebase/app';
 
@@ -76,116 +78,142 @@ export default function HomeScreen() {
     });
   };
 
-  // Fetch user's ride requests
+  // Fetch user's ride requests - IMPROVED VERSION
   const fetchUserRideRequests = async (userId) => {
     if (!userId) return;
     
     try {
+      console.log('Fetching ride requests for user:', userId);
+      
       // First fetch the ride requests
       const requestsRef = collection(db, 'ride_requests');
       const requestsQuery = query(
         requestsRef,
-        where('passenger_id', '==', userId)
+        where('passenger_id', '==', userId),
+        where('status', '==', 'accepted')
       );
       
       const requestsSnapshot = await getDocs(requestsQuery);
       
       if (requestsSnapshot.empty) {
+        console.log('No accepted ride requests found');
         setUserRideRequests([]);
         return;
       }
+      
+      console.log('Found accepted ride requests:', requestsSnapshot.size);
       
       const requestsData = requestsSnapshot.docs.map(doc => ({
         id: doc.id,
         ...doc.data()
       }));
       
-      // Get all ride IDs from the requests
-      const rideIds = requestsData.map(request => request.ride_id);
-      
-      if (rideIds.length === 0) {
-        setUserRideRequests([]);
-        return;
-      }
-      
-      // Get the rides - Firebase doesn't support direct 'in' queries with arrays that are too large
-      // so we'll fetch each ride individually and combine them
-      const ridesPromises = rideIds.map(rideId => {
-        const rideRef = collection(db, 'rides');
-        const rideQuery = query(rideRef, where('id', '==', rideId));
-        return getDocs(rideQuery);
-      });
-      
-      const ridesResults = await Promise.all(ridesPromises);
-      
-      // Extract rides data from results
-      let ridesData = [];
-      ridesResults.forEach(snapshot => {
-        if (!snapshot.empty) {
-          snapshot.docs.forEach(doc => {
-            ridesData.push({ id: doc.id, ...doc.data() });
-          });
-        }
-      });
-      
-      // Get all driver IDs
-      const driverIds = ridesData
-        .map(ride => ride.driver_id)
-        .filter(Boolean);
-      
-      // Get the driver profiles - same approach as rides
-      const profilesPromises = driverIds.map(driverId => {
-        const profileRef = collection(db, 'profiles');
-        const profileQuery = query(profileRef, where('user_id', '==', driverId));
-        return getDocs(profileQuery);
-      });
-      
-      const profilesResults = await Promise.all(profilesPromises);
-      
-      // Extract profile data
-      let driverProfiles = [];
-      profilesResults.forEach(snapshot => {
-        if (!snapshot.empty) {
-          snapshot.docs.forEach(doc => {
-            driverProfiles.push({ id: doc.id, ...doc.data() });
-          });
-        }
-      });
-      
-      // Combine the data
-      const combinedData = requestsData.map(request => {
-        const relatedRide = ridesData.find(ride => ride.id === request.ride_id);
-        
-        if (!relatedRide) return request; // No matching ride found
-        
-        const driverProfile = driverProfiles.find(
-          profile => profile.user_id === relatedRide.driver_id
-        );
-        
-        // Format the ride data to match expected structure
-        return {
-          ...request,
-          ride: {
-            ride_id: relatedRide.id,
-            pickup_location: relatedRide.pickup_location,
-            dropoff_location: relatedRide.dropoff_location,
-            price: relatedRide.price,
-            departure_time: relatedRide.departure_time,
-            available_seats: relatedRide.available_seats,
-            vehicle_name: relatedRide.vehicle_name,
-            status: relatedRide.status,
-            driver_id: relatedRide.driver_id,
-            driver_name: driverProfile?.full_name || 'Unknown Driver',
-            driver_phone: driverProfile?.phoneNumber|| 'N/A',
-            driver_avatar: driverProfile?.avatar_url || ''
+      // Process each request individually to handle any possible errors
+      const processedRequests = await Promise.all(
+        requestsData.map(async (request) => {
+          try {
+            // Get the full ride document using document ID
+            const rideId = request.ride_id;
+            if (!rideId) {
+              console.error('No ride_id found in request:', request.id);
+              return null;
+            }
+            
+            console.log('Fetching ride details for:', rideId);
+            
+            // Use getDoc for better performance when fetching a known document
+            const rideDocRef = doc(db, 'rides', rideId);
+            const rideDoc = await getDoc(rideDocRef);
+            
+            if (!rideDoc.exists()) {
+              console.error('Ride document not found for ID:', rideId);
+              return null;
+            }
+            
+            const rideData = {
+              id: rideDoc.id,
+              ...rideDoc.data()
+            };
+            
+            // Get driver info if we have driver_id
+            const driverId = rideData.driver_id;
+            if (!driverId) {
+              console.error('No driver_id found in ride:', rideId);
+              // Return with default values for driver info
+              return {
+                ...request,
+                ride: {
+                  ride_id: rideData.id,
+                  pickup_location: rideData.pickup_location || 'Unknown',
+                  dropoff_location: rideData.dropoff_location || 'Unknown',
+                  price: rideData.price || '0',
+                  departure_time: rideData.departure_time || new Date().toISOString(),
+                  available_seats: rideData.available_seats || 0,
+                  vehicle_name: rideData.vehicle_name || 'Unknown Vehicle',
+                  status: rideData.status || 'unknown',
+                  driver_id: driverId || 'unknown',
+                  driver_name: 'Unknown Driver',
+                  driver_phone: 'N/A',
+                  driver_avatar: ''
+                }
+              };
+            }
+            
+            console.log('Fetching driver profile for:', driverId);
+            
+            // Get driver profile from profiles collection
+            const profileRef = collection(db, 'profiles');
+            const profileQuery = query(profileRef, where('user_id', '==', driverId));
+            const profileSnapshot = await getDocs(profileQuery);
+            
+            let driverProfile = {
+              full_name: 'Unknown Driver',
+              phoneNumber: 'N/A',
+              avatar_url: ''
+            };
+            
+            if (!profileSnapshot.empty) {
+              const profileData = profileSnapshot.docs[0].data();
+              driverProfile = {
+                full_name: profileData.fullName || 'Unknown Driver',
+                phoneNumber: profileData.phoneNumber || 'N/A',
+                avatar_url: profileData.avatar_url || ''
+              };
+            }
+            
+            // Format and return the complete request with ride and driver info
+            return {
+              ...request,
+              ride: {
+                ride_id: rideData.id,
+                pickup_location: rideData.pickup_location || 'Unknown',
+                dropoff_location: rideData.dropoff_location || 'Unknown',
+                price: rideData.price || '0',
+                departure_time: rideData.departure_time || new Date().toISOString(),
+                available_seats: rideData.available_seats || 0,
+                vehicle_name: rideData.vehicle_name || 'Unknown Vehicle',
+                status: rideData.status || 'unknown',
+                driver_id: driverId,
+                driver_name: driverProfile.full_name,
+                driver_phone: driverProfile.phoneNumber,
+                driver_avatar: driverProfile.avatar_url
+              }
+            };
+          } catch (err) {
+            console.error('Error processing ride request:', request.id, err);
+            return null;
           }
-        };
-      });
+        })
+      );
       
-      console.log('User ride requests with ride data:', combinedData);
-      setUserRideRequests(combinedData);
+      // Filter out any null results from failed processing
+      const validRequests = processedRequests.filter(req => req !== null);
+      console.log('Processed accepted ride requests:', validRequests.length);
+      
+      setUserRideRequests(validRequests);
     } catch (err) {
       console.error('Error fetching user ride requests:', err);
+      setError('Failed to load your accepted rides');
     }
   };
 
@@ -262,7 +290,9 @@ export default function HomeScreen() {
             full_name: driverProfile?.fullName || 'Unknown Driver',
             phone_no: driverProfile?.phoneNumber || 'N/A',
             avatar_url: driverProfile?.avatar_url || ''
-          }
+          },
+          // Add isCurrentUserDriver flag to indicate if the current user is the driver
+          isCurrentUserDriver: ride.driver_id === currentUserId
         };
       });
       
@@ -281,15 +311,49 @@ export default function HomeScreen() {
   // Initialize data
   useEffect(() => {
     const initializeData = async () => {
-      const userId = await fetchCurrentUser();
-      await Promise.all([
-        fetchRides(),
-        fetchUserRideRequests(userId)
-      ]);
+      try {
+        const userId = await fetchCurrentUser();
+        console.log('Current user ID:', userId);
+        
+        if (userId) {
+          // Load both data types in parallel
+          await Promise.all([
+            fetchRides(),
+            fetchUserRideRequests(userId)
+          ]);
+        } else {
+          await fetchRides();
+        }
+      } catch (err) {
+        console.error('Error initializing data:', err);
+        setError('Failed to load data. Please try again.');
+        setLoading(false);
+      }
     };
     
     initializeData();
   }, []);
+
+  // Update ride data when currentUserId changes
+  useEffect(() => {
+    if (currentUserId && rides.length > 0) {
+      // Update the isCurrentUserDriver flag for all rides
+      const updatedRides = rides.map(ride => ({
+        ...ride,
+        isCurrentUserDriver: ride.driver.id === currentUserId
+      }));
+      
+      setRides(updatedRides);
+      
+      // Also update filtered rides
+      const updatedFilteredRides = filteredRides.map(ride => ({
+        ...ride,
+        isCurrentUserDriver: ride.driver.id === currentUserId
+      }));
+      
+      setFilteredRides(updatedFilteredRides);
+    }
+  }, [currentUserId, rides.length]);
 
   // Filter rides when search query changes
   useEffect(() => {
@@ -306,9 +370,17 @@ export default function HomeScreen() {
 
   const onRefresh = async () => {
     setRefreshing(true);
-    await fetchRides();
-    await fetchUserRideRequests(currentUserId);
-    setRefreshing(false);
+    try {
+      await Promise.all([
+        fetchRides(),
+        fetchUserRideRequests(currentUserId)
+      ]);
+    } catch (err) {
+      console.error('Error refreshing data:', err);
+      setError('Failed to refresh data');
+    } finally {
+      setRefreshing(false);
+    }
   };
 
   const handleSearchChange = (text) => {
@@ -320,10 +392,8 @@ export default function HomeScreen() {
     setDropdownVisible(false);
   };
 
-  // Get accepted ride requests
-  const acceptedRideRequests = userRideRequests.filter(request => 
-    request.status.toLowerCase() === 'accepted'
-  );
+  // Get accepted ride requests (already filtered in the fetch function)
+  const acceptedRideRequests = userRideRequests;
 
   if (loading) {
     return (
@@ -470,7 +540,7 @@ export default function HomeScreen() {
             <Text style={styles.errorText}>{error}</Text>
             <TouchableOpacity 
               style={styles.retryButton}
-              onPress={fetchRides}
+              onPress={onRefresh}
             >
               <Text style={styles.retryButtonText}>Try Again</Text>
             </TouchableOpacity>
@@ -491,9 +561,20 @@ export default function HomeScreen() {
               filteredRides.map((ride) => (
                 <TouchableOpacity 
                   key={ride.id} 
-                  style={styles.rideCard}
+                  style={[
+                    styles.rideCard,
+                    ride.isCurrentUserDriver && styles.offeringRideCard
+                  ]}
                   onPress={() => router.push(`./components/ride/${ride.id}`)}
                 >
+                  {/* Add Offering badge if the current user is the driver */}
+                  {ride.isCurrentUserDriver && (
+                    <View style={styles.offeringBadge}>
+                      <Star size={16} color="#fff" />
+                      <Text style={styles.offeringBadgeText}>Offering</Text>
+                    </View>
+                  )}
+                  
                   <View style={styles.rideHeader}>
                     <Image
                       source={{ uri: ride.driver.avatar_url || 
@@ -502,7 +583,9 @@ export default function HomeScreen() {
                       style={styles.driverImage}
                     />
                     <View>
-                      <Text style={styles.driverName}>{ride.driver.full_name}</Text>
+                      <Text style={styles.driverName}>
+                        {ride.isCurrentUserDriver ? 'You' : ride.driver.full_name}
+                      </Text>
                       <Text style={styles.carInfo}>{ride.vehicle_name}</Text>
                     </View>
                     <Text style={styles.price}>${ride.price}</Text>
@@ -791,27 +874,52 @@ const styles = StyleSheet.create({
     fontFamily: 'Inter-SemiBold',
   },
   acceptedRideCard: {
-    borderColor: '#3B82F6',
+    borderColor: '#22C55E',
     borderWidth: 2,
     backgroundColor: '#F0F9FF',
+    borderRadius: 16,
     position: 'relative',
-    marginBottom: 24,
+    marginTop: 16, // Add some margin at top to make room for the badge
   },
   acceptedBadge: {
     position: 'absolute',
-    top: -12,
-    right: 16,
+    top: -16, // This positions it halfway above the card
+    right: 16, 
     backgroundColor: '#22C55E',
-    borderRadius: 12,
+    borderRadius: 16,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
     flexDirection: 'row',
     alignItems: 'center',
-    paddingVertical: 4,
-    paddingHorizontal: 12,
+    zIndex: 1,
   },
   acceptedBadgeText: {
     color: '#fff',
     fontSize: 12,
-    fontFamily: 'Inter-SemiBold',
+    fontFamily: 'Inter-Medium',
+  },
+  offeringRideCard: {
+    borderColor: '#3B82F6',
+    borderWidth: 2,
+    backgroundColor: '#F0FDF4',
+    position: 'relative',
+    marginTop: 16,
+  },
+  offeringBadge: {
+    position: 'absolute',
+    top: -16,
+    right: 12,
+    backgroundColor: '#22C55E',
+    borderRadius: 16,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  offeringBadgeText: {
+    color: '#fff',
+    fontSize: 12,
+    fontFamily: 'Inter-Medium',
     marginLeft: 4,
   },
 });
