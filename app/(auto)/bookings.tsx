@@ -1,43 +1,42 @@
-import React from 'react';
-import { View, Text, StyleSheet, FlatList, TouchableOpacity } from 'react-native';
+import React, { useState, useEffect } from 'react';
+import { View, Text, StyleSheet, FlatList, TouchableOpacity, ActivityIndicator } from 'react-native';
 import { Calendar, Clock, MapPin } from 'lucide-react-native';
-
-const bookingsData = [
-  {
-    id: '1',
-    date: 'Today, 2:30 PM',
-    pickup: '123 Main Street',
-    destination: 'City Mall',
-    status: 'Upcoming',
-    price: '₹120',
-  },
-  {
-    id: '2',
-    date: 'Yesterday, 11:15 AM',
-    pickup: 'Office Park',
-    destination: 'Airport Terminal 2',
-    status: 'Completed',
-    price: '₹350',
-  },
-  {
-    id: '3',
-    date: 'Mar 11, 2025, 9:00 AM',
-    pickup: 'Home',
-    destination: 'Railway Station',
-    status: 'Completed',
-    price: '₹180',
-  },
-  {
-    id: '4',
-    date: 'Mar 08, 2025, 6:45 PM',
-    pickup: 'Restaurant',
-    destination: 'Home',
-    status: 'Completed',
-    price: '₹150',
-  },
-];
+import { collection, query, orderBy, getDocs } from 'firebase/firestore';
+import { db } from '../../firebase/Config'; // Adjust this import path to match your Firebase config location
 
 export default function BookingsScreen() {
+  const [bookings, setBookings] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    fetchBookings();
+  }, []);
+
+  const fetchBookings = async () => {
+    try {
+      setLoading(true);
+      const bookingsRef = collection(db, 'bookings');
+      const q = query(bookingsRef, orderBy('date', 'desc'));
+      const querySnapshot = await getDocs(q);
+      
+      const bookingsData = [];
+      querySnapshot.forEach((doc) => {
+        bookingsData.push({
+          id: doc.id,
+          ...doc.data()
+        });
+      });
+      
+      setBookings(bookingsData);
+      setLoading(false);
+    } catch (err) {
+      console.error('Error fetching bookings:', err);
+      setError('Failed to load bookings. Please try again.');
+      setLoading(false);
+    }
+  };
+
   const renderItem = ({ item }) => (
     <TouchableOpacity style={styles.bookingCard}>
       <View style={styles.bookingHeader}>
@@ -77,18 +76,54 @@ export default function BookingsScreen() {
     </TouchableOpacity>
   );
 
+  const renderContent = () => {
+    if (loading) {
+      return (
+        <View style={styles.centerContainer}>
+          <ActivityIndicator size="large" color="#3B82F6" />
+          <Text style={styles.loadingText}>Loading bookings...</Text>
+        </View>
+      );
+    }
+
+    if (error) {
+      return (
+        <View style={styles.centerContainer}>
+          <Text style={styles.errorText}>{error}</Text>
+          <TouchableOpacity style={styles.retryButton} onPress={fetchBookings}>
+            <Text style={styles.retryButtonText}>Retry</Text>
+          </TouchableOpacity>
+        </View>
+      );
+    }
+
+    if (bookings.length === 0) {
+      return (
+        <View style={styles.centerContainer}>
+          <Text style={styles.emptyText}>No bookings found</Text>
+        </View>
+      );
+    }
+
+    return (
+      <FlatList
+        data={bookings}
+        renderItem={renderItem}
+        keyExtractor={item => item.id}
+        contentContainerStyle={styles.listContainer}
+        refreshing={loading}
+        onRefresh={fetchBookings}
+      />
+    );
+  };
+
   return (
     <View style={styles.container}>
       <View style={styles.header}>
         <Text style={styles.headerTitle}>My Bookings</Text>
       </View>
 
-      <FlatList
-        data={bookingsData}
-        renderItem={renderItem}
-        keyExtractor={item => item.id}
-        contentContainerStyle={styles.listContainer}
-      />
+      {renderContent()}
     </View>
   );
 }
@@ -212,6 +247,41 @@ const styles = StyleSheet.create({
   detailsButtonText: {
     fontSize: 14,
     color: '#3B82F6',
+    fontFamily: 'Inter-Medium',
+  },
+  centerContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+  },
+  loadingText: {
+    marginTop: 12,
+    fontSize: 16,
+    color: '#64748B',
+    fontFamily: 'Inter-Regular',
+  },
+  errorText: {
+    fontSize: 16,
+    color: '#EF4444',
+    fontFamily: 'Inter-Regular',
+    textAlign: 'center',
+    marginBottom: 16,
+  },
+  emptyText: {
+    fontSize: 16,
+    color: '#64748B',
+    fontFamily: 'Inter-Regular',
+  },
+  retryButton: {
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    backgroundColor: '#3B82F6',
+    borderRadius: 6,
+  },
+  retryButtonText: {
+    fontSize: 14,
+    color: '#FFFFFF',
     fontFamily: 'Inter-Medium',
   },
 });

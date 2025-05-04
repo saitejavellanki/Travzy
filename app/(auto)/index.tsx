@@ -2,16 +2,16 @@ import React, { useState, useEffect, useRef } from 'react';
 import { View, Text, StyleSheet, TextInput, TouchableOpacity, ScrollView, ActivityIndicator, Modal, Image, Keyboard, Alert } from 'react-native';
 import { MapPin, Navigation, ChevronRight, X, Crosshair, Search, XCircle } from 'lucide-react-native';
 import { auth, db } from '../../firebase/Config';
-import { collection, getDocs, query, where } from 'firebase/firestore';
+import { collection, addDoc, getDocs,getDoc, doc, query, where, Timestamp } from 'firebase/firestore';
 import * as Location from 'expo-location';
 import { router } from 'expo-router';
 import { GooglePlacesAutocomplete } from 'react-native-google-places-autocomplete';
 import 'react-native-get-random-values';
 import { v4 as uuidv4 } from 'uuid';
-import { GOOGLE_API } from '../apiKeys';
+
 
 // Add your Google API key here
-const GOOGLE_PLACES_API_KEY = GOOGLE_API;
+const GOOGLE_PLACES_API_KEY = 'AIzaSyDcifgYhYDinAJCQbIL1Sqgr-oV0awByiE';
 const newId = uuidv4();
 
 // VIT-AP University coordinates and address
@@ -407,33 +407,90 @@ const showDistanceAlert = (type, isCurrentLocation = false) => {
   };
 
   // Handle booking confirmation and navigate to RideSearchScreen
-  const confirmRideBooking = () => {
-    // Check if destination details are available
-    if (!pickupDetails || !destinationDetails) {
-      alert('Location details are incomplete. Please try again.');
+  // Fix for the confirmRideBooking function
+const confirmRideBooking = async () => {
+  // Check if destination details are available
+  if (!pickupDetails || !destinationDetails) {
+    alert('Location details are incomplete. Please try again.');
+    return;
+  }
+  
+  // Get the price for the selected ride type
+  const selectedPrice = prices[selectedRideType];
+  
+  try {
+    // Show loading state
+    setCalculatingPrice(true);
+    
+    const currentUser = auth.currentUser;
+    if (!currentUser) {
+      alert('You must be logged in to book a ride');
       return;
     }
     
-    // Get the price for the selected ride type
-    const selectedPrice = prices[selectedRideType];
+    // Generate a custom ID for the document (optional)
+    // const newId = uuidv4(); - Remove this if using Firestore's auto-ID
+    
+    // Create ride data object - REMOVE ride_id field since Firestore will generate a document ID
+    const rideData = {
+      user_id: currentUser.uid,
+      pickup: {
+        name: pickupDetails.description || '',
+        address: pickupDetails.address || pickupDetails.description || '',
+        latitude: pickupDetails.geometry?.location?.lat || 0,
+        longitude: pickupDetails.geometry?.location?.lng || 0
+      },
+      destination: {
+        name: destinationDetails.description || '',
+        address: destinationDetails.address || destinationDetails.description || '',
+        latitude: destinationDetails.geometry?.location?.lat || 0,
+        longitude: destinationDetails.geometry?.location?.lng || 0
+      },
+      distance: distance || 0,
+      duration: duration || 0,
+      price: selectedPrice || 0,
+      ride_type: selectedRideType || 'regular',
+      status: 'searching', // Initial status
+      created_at: Timestamp.now(),
+      driver_id: null, // Will be assigned later
+      completed_at: null
+    };
+    
+    // Save to Firebase and wait for the operation to complete
+    const rideRef = await addDoc(collection(db, 'rides'), rideData);
+    console.log('Ride saved with ID:', rideRef.id);
+    
+    // IMPORTANT: Make a second operation to confirm the document exists
+    // This ensures we don't navigate before the document is confirmed created
+    const docCheck = await getDoc(doc(db, 'rides', rideRef.id));
+    
+    if (!docCheck.exists()) {
+      throw new Error('Ride document was not created properly');
+    }
     
     // Close the modal
     setShowPricing(false);
     
-    // Store ride data globally for access in the next screen
-    global.rideData = {
-      pickup: pickupDetails.description,
-      destination: destinationDetails.description,
-      distance,
-      duration,
-      price: selectedPrice,
-      rideType: selectedRideType
-    };
-    
-    // Navigate with just the path, no parameters
-    router.push('/components/ride/RideSearchScreen');
+    // Navigate with params
+    router.push({
+      pathname: '/components/ride/RideSearchScreen',
+      params: { 
+        ride_id: rideRef.id, // Pass the Firebase document ID
+        pickup: pickupDetails.description,
+        destination: destinationDetails.description,
+        distance,
+        duration,
+        price: selectedPrice,
+        rideType: selectedRideType
+      }
+    });
+  } catch (error) {
+    console.error('Error saving ride to Firebase:', error);
+    alert('Failed to book your ride. Please try again.');
+  } finally {
+    setCalculatingPrice(false);
   }
-
+};
   // Close keyboard when tapping outside input fields
   const handlePressOutside = () => {
     Keyboard.dismiss();

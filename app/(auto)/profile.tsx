@@ -12,10 +12,11 @@ type Profile = {
   created_at: string;
 };
 
-export default function AutoProfileScreen() {
+export default function ProfileScreen() {
   const [profile, setProfile] = useState<Profile | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  
   useEffect(() => {
     fetchProfile();
   }, []);
@@ -33,23 +34,31 @@ export default function AutoProfileScreen() {
         return;
       }
 
-      // Get profile data from Firestore
+      console.log("Current user ID:", currentUser.uid);
+      
+      // Get profile data from Firestore - use the user's UID directly
       const profileRef = doc(db, 'profiles', currentUser.uid);
       const profileSnap = await getDoc(profileRef);
+      
+      console.log("Profile exists:", profileSnap.exists());
       
       if (profileSnap.exists()) {
         // Transform the data to match our Profile type
         const profileData = profileSnap.data();
+        console.log("Retrieved profile data:", profileData);
+        
         setProfile({
           user_id: currentUser.uid,
           full_name: profileData.full_name || currentUser.displayName || 'User',
-          avatar_url: profileData.avatar_url,
+          avatar_url: profileData.avatar_url || null,
           created_at: profileData.created_at || new Date().toISOString(),
         });
       } else {
+        console.log("Creating new profile");
         // Create a basic profile if it doesn't exist
         const newProfile = {
           user_id: currentUser.uid,
+          uid: currentUser.uid, // Adding this to match your Firestore structure
           full_name: currentUser.displayName || 'User',
           avatar_url: currentUser.photoURL,
           created_at: new Date().toISOString(),
@@ -59,8 +68,8 @@ export default function AutoProfileScreen() {
         setProfile(newProfile);
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'An error occurred');
       console.error('Profile fetch error:', err);
+      setError(err instanceof Error ? err.message : 'An error occurred');
     } finally {
       setLoading(false);
     }
@@ -80,7 +89,9 @@ export default function AutoProfileScreen() {
     }
   };
 
-
+  const handleRefresh = () => {
+    fetchProfile();
+  };
 
   if (loading) {
     return (
@@ -148,6 +159,13 @@ export default function AutoProfileScreen() {
               'Help & Support'
             )}
           </View>
+          
+          <TouchableOpacity
+            style={styles.debugButton}
+            onPress={handleRefresh}
+          >
+            <Text style={styles.debugButtonText}>Refresh Profile</Text>
+          </TouchableOpacity>
           
           <TouchableOpacity
             style={styles.logoutButton}
@@ -318,6 +336,22 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: '#0F172A',
     fontFamily: 'Inter-Regular',
+  },
+  debugButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#E0F2FE',
+    margin: 16,
+    marginBottom: 0,
+    padding: 12,
+    borderRadius: 12,
+  },
+  debugButtonText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#0284C7',
+    fontFamily: 'Inter-SemiBold',
   },
   logoutButton: {
     flexDirection: 'row',

@@ -1,799 +1,698 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { 
-  View, 
-  Text, 
-  StyleSheet, 
-  TouchableOpacity, 
-  Image, 
-  Animated, 
-  Dimensions, 
-  Modal,
-  StatusBar,
-  BackHandler,
-  Alert,
-  LogBox // For debugging
-} from 'react-native';
-import MapView, { Marker, PROVIDER_GOOGLE, Polyline } from 'react-native-maps';
-import * as Location from 'expo-location';
-import { ArrowLeft, XCircle, Phone, Navigation, MessageSquare, User } from 'lucide-react-native';
+import React, { useState, useEffect } from 'react';
+import { View, Text, StyleSheet, TouchableOpacity, ActivityIndicator, Image, Alert } from 'react-native';
+import { useLocalSearchParams, router } from 'expo-router';
 import { auth, db } from '../../firebase/Config';
-import { getDatabase, ref, set, push, onValue, off } from 'firebase/database';
-import { decode } from '@mapbox/polyline';
-import { GOOGLE_API } from '../apiKeys';
+import { doc, onSnapshot, updateDoc, getDoc } from 'firebase/firestore';
+import { MapPin, Navigation, Phone, X, ChevronLeft } from 'lucide-react-native';
+import LottieView from 'lottie-react-native'; // Make sure to install lottie-react-native
 
-// Ignore warnings during development
-LogBox.ignoreLogs(['Warning: ...']); // Add specific warnings to ignore
+// Path to your animation file (place in assets folder)
+// You'll need to add a s // Update this path to your animation file
 
-const { width, height } = Dimensions.get('window');
+export default function RideSearchScreen() {
+  // Get params passed from BookAutoScreen
+  const params = useLocalSearchParams();
+  const {
+    ride_id,
+    pickup,
+    destination,
+    distance,
+    duration,
+    price,
+    rideType
+  } = params;
 
-export default function RideSearchScreen({ route, navigation }) {
-  // Get ride details from navigation params
-  const { pickup, destination, distance, duration, price, rideType } = route.params;
-  
-  // State for map and locations
-  const [pickupCoords, setPickupCoords] = useState(null);
-  const [destinationCoords, setDestinationCoords] = useState(null);
-  const [routeCoordinates, setRouteCoordinates] = useState([]);
-  const [region, setRegion] = useState(null);
-  
-  // State for ride searching and matching
   const [searching, setSearching] = useState(true);
-  const [searchTimeout, setSearchTimeout] = useState(45); // 45 seconds to find a driver
-  const [driverFound, setDriverFound] = useState(false);
-  const [driverDetails, setDriverDetails] = useState(null);
-  const [rideId, setRideId] = useState(null);
-  const [isCancelling, setIsCancelling] = useState(false);
-  const [isArriving, setIsArriving] = useState(false);
-  
-  // Add debug states
+  const [searchTime, setSearchTime] = useState(0); // in seconds
+  const [driver, setDriver] = useState(null);
+  const [ride, setRide] = useState(null);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [dbConnectionStatus, setDbConnectionStatus] = useState('Initializing...');
-  
-  // Refs for animations
-  const searchAnimation = useRef(new Animated.Value(0)).current;
-  const pulseAnimation = useRef(new Animated.Value(1)).current;
-  
-  // Refs for map and timers
-  const mapRef = useRef(null);
-  const searchTimerRef = useRef(null);
-  const driverListenerRef = useRef(null);
-  
+  const [debugInfo, setDebugInfo] = useState('');
+
+  // Debug incoming params and check Firestore connection
   useEffect(() => {
-    // Set up back button handler
-    const backHandler = BackHandler.addEventListener('hardwareBackPress', () => {
-      handleCancelSearch();
-      return true;
-    });
+    console.log('==== DEBUG: RIDE SEARCH PARAMS ====');
+    console.log('ride_id:', ride_id);
+    console.log('pickup:', pickup);
+    console.log('destination:', destination);
+    console.log('price:', price);
     
-    // Initialize map with location coordinates
-    initializeMap();
+    // Check Firebase config/initialization
+    console.log('DEBUG: Firebase db object exists:', !!db);
     
-    // Start search animation
-    startSearchAnimation();
+    // Log all params for debugging
+    const allParams = JSON.stringify(params);
+    console.log('DEBUG: All URL params:', allParams);
     
-    // Start countdown timer for search
-    startSearchCountdown();
-    
-    // Check Firebase connection
-    checkFirebaseConnection();
-    
-    return () => {
-      // Clean up on unmount
-      backHandler.remove();
-      if (searchTimerRef.current) clearInterval(searchTimerRef.current);
-      if (driverListenerRef.current) {
-        const db = getDatabase();
-        off(driverListenerRef.current);
-      }
-    };
-  }, []);
-  
-  // Add a function to check Firebase connection
-  const checkFirebaseConnection = async () => {
-    try {
-      const database = getDatabase();
-      const connectedRef = ref(database, '.info/connected');
-      
-      onValue(connectedRef, (snap) => {
-        if (snap.val() === true) {
-          setDbConnectionStatus('Connected to Firebase');
-        } else {
-          setDbConnectionStatus('Disconnected from Firebase');
-          setError('Firebase connection issues. Please check your internet connection.');
-        }
-      });
-    } catch (error) {
-      console.error('Firebase connection check error:', error);
-      setDbConnectionStatus('Error checking connection');
-      setError(`Firebase error: ${error.message}`);
-    }
-  };
-  
-  const initializeMap = async () => {
-    try {
-      console.log('Initializing map with pickup:', pickup, 'destination:', destination);
-      
-      // Get coordinates for pickup and destination
-      let pickupLocation, destinationLocation;
-      
-      try {
-        pickupLocation = await Location.geocodeAsync(pickup);
-        console.log('Pickup geocoding result:', pickupLocation);
-      } catch (error) {
-        console.error('Error geocoding pickup location:', error);
-        setError(`Geocoding pickup error: ${error.message}`);
-        
-        // Use fallback coordinates for pickup
-        pickupLocation = [{ latitude: 12.9716, longitude: 77.5946 }]; // Bangalore coordinates as fallback
-      }
-      
-      try {
-        destinationLocation = await Location.geocodeAsync(destination);
-        console.log('Destination geocoding result:', destinationLocation);
-      } catch (error) {
-        console.error('Error geocoding destination location:', error);
-        setError(`Geocoding destination error: ${error.message}`);
-        
-        // Use fallback coordinates for destination
-        destinationLocation = [{ latitude: 13.0827, longitude: 77.5090 }]; // Nearby location as fallback
-      }
-      
-      if (pickupLocation.length > 0 && destinationLocation.length > 0) {
-        const pickupLatLng = {
-          latitude: pickupLocation[0].latitude,
-          longitude: pickupLocation[0].longitude,
-        };
-        
-        const destinationLatLng = {
-          latitude: destinationLocation[0].latitude,
-          longitude: destinationLocation[0].longitude,
-        };
-        
-        setPickupCoords(pickupLatLng);
-        setDestinationCoords(destinationLatLng);
-        
-        // Set initial region to fit both points
-        const midLat = (pickupLatLng.latitude + destinationLatLng.latitude) / 2;
-        const midLng = (pickupLatLng.longitude + destinationLatLng.longitude) / 2;
-        
-        // Calculate delta values to ensure both markers are visible
-        const latDelta = Math.abs(pickupLatLng.latitude - destinationLatLng.latitude) * 1.5;
-        const lngDelta = Math.abs(pickupLatLng.longitude - destinationLatLng.longitude) * 1.5;
-        
-        setRegion({
-          latitude: midLat,
-          longitude: midLng,
-          latitudeDelta: Math.max(0.02, latDelta),
-          longitudeDelta: Math.max(0.02, lngDelta),
-        });
-        
-        // Fetch route between points
-        fetchRoute(pickupLatLng, destinationLatLng);
-        
-        // Create ride request in Firebase
-        createRideRequest(pickupLatLng, destinationLatLng);
-      } else {
-        throw new Error('Could not get coordinates for pickup or destination');
-      }
-    } catch (error) {
-      console.error('Error initializing map:', error);
-      setError(`Map initialization error: ${error.message}`);
-      Alert.alert('Error', 'Failed to load map. Please try again.');
-      // Don't navigate back immediately, give user a chance to see the error
-    }
-  };
-  
-  const fetchRoute = async (origin, destination) => {
-    try {
-      console.log('Fetching route between', origin, 'and', destination);
-      
-      // // For development, use mock data instead of actual API call
-      // // In production, uncomment the fetch code below and remove mock data
-      
-      // // Mock polyline data for development
-      // const mockPolyline = "mliwFnecbMt@}AtAcCnAyBdAkB|@_BvAiCrAyBbByC~@{AnA_BhB{BnBwBhAaA|A_AvAy@hBy@dBm@|@W~@Q";
-      // const decodedCoords = decode(mockPolyline);
-      // const routeCoords = decodedCoords.map(point => ({
-      //   latitude: point[0],
-      //   longitude: point[1]
-      // }));
-      
-      setRouteCoordinates(routeCoords);
-      console.log('Route coordinates set:', routeCoords.length, 'points');
-      
-      //  In production, use this code to fetch real directions
-      const apiKey = GOOGLE_API; // Replace with your API key
-      if (!apiKey || apiKey === GOOGLE_API) {
-        console.warn('No Google Maps API key provided. Using mock data.');
-        return;
-      }
-      
-      const apiUrl = `https://maps.googleapis.com/maps/api/directions/json?origin=${origin.latitude},${origin.longitude}&destination=${destination.latitude},${destination.longitude}&key=${apiKey}`;
-      
-      const response = await fetch(apiUrl);
-      const data = await response.json();
-      
-      if (data.status === 'OK' && data.routes.length > 0) {
-        const points = data.routes[0].overview_polyline.points;
-        const decodedCoords = decode(points);
-        const routeCoords = decodedCoords.map(point => ({
-          latitude: point[0],
-          longitude: point[1]
-        }));
-        
-        setRouteCoordinates(routeCoords);
-        console.log('Route coordinates set from API:', routeCoords.length, 'points');
-      } else {
-        console.error('Google Maps API error:', data);
-        setError(`Route API error: ${data.status}`);
-      }
-      // */
-    } catch (error) {
-      console.error('Error fetching route:', error);
-      setError(`Route fetch error: ${error.message}`);
-    }
-  };
-  
-  const createRideRequest = async (pickupLatLng, destinationLatLng) => {
-    try {
-      const currentUser = auth.currentUser;
-      
-      if (!currentUser) {
-        const errorMsg = 'You need to be logged in to book a ride';
-        setError(errorMsg);
-        Alert.alert('Error', errorMsg);
-        navigation.goBack();
-        return;
-      }
-      
-      console.log('Creating ride request for user:', currentUser.uid);
-      
-      const database = getDatabase();
-      
-      // Check if rides path exists first
-      const testRef = ref(database, 'rides');
-      onValue(testRef, (snapshot) => {
-        console.log('Rides reference exists:', snapshot.exists());
-      }, {
-        onlyOnce: true
-      });
-      
-      const ridesRef = ref(database, 'rides');
-      const newRideRef = push(ridesRef);
-      
-      const rideData = {
-        userId: currentUser.uid,
-        userName: currentUser.displayName || 'User',
-        userPhone: currentUser.phoneNumber || '',
-        pickup: {
-          address: pickup,
-          latitude: pickupLatLng.latitude,
-          longitude: pickupLatLng.longitude
-        },
-        destination: {
-          address: destination,
-          latitude: destinationLatLng.latitude,
-          longitude: destinationLatLng.longitude
-        },
-        distance: distance,
-        duration: duration,
-        fare: price,
-        rideType: rideType,
-        status: 'searching', // searching, accepted, in_progress, completed, cancelled
-        timestamp: Date.now(),
-        paymentMethod: 'cash', // Default payment method
-        driverId: null
-      };
-      
-      console.log('Ride data to save:', rideData);
-      console.log('Ride ID:', newRideRef.key);
-      
-      await set(newRideRef, rideData);
-      setRideId(newRideRef.key);
-      console.log('Ride created with ID:', newRideRef.key);
-      
-      // Listen for driver acceptance
-      listenForDriverAcceptance(newRideRef.key);
-      
-    } catch (error) {
-      console.error('Error creating ride request:', error);
-      setError(`Ride creation error: ${error.message}`);
-      Alert.alert('Error', 'Failed to create ride request. Please try again.');
-    }
-  };
-  
-  const listenForDriverAcceptance = (rideId) => {
-    try {
-      console.log('Setting up listener for ride:', rideId);
-      
-      const database = getDatabase();
-      const rideRef = ref(database, `rides/${rideId}`);
-      
-      driverListenerRef.current = rideRef;
-      
-      onValue(rideRef, (snapshot) => {
-        console.log('Ride update received. Exists:', snapshot.exists());
-        
-        if (!snapshot.exists()) {
-          console.error('Ride does not exist in database');
-          setError('Ride not found in database. It may have been deleted.');
-          return;
-        }
-        
-        const rideData = snapshot.val();
-        console.log('Ride data update:', rideData);
-        
-        if (rideData && rideData.status === 'accepted' && rideData.driverId) {
-          // Driver has accepted the ride
-          console.log('Driver accepted ride:', rideData.driverId);
-          setSearching(false);
-          setDriverFound(true);
-          setIsArriving(true);
-          
-          // Get driver details
-          const driverRef = ref(database, `drivers/${rideData.driverId}`);
-          onValue(driverRef, (driverSnapshot) => {
-            console.log('Driver details retrieved. Exists:', driverSnapshot.exists());
-            
-            if (!driverSnapshot.exists()) {
-              console.warn('Driver not found in database');
-              // Create mock driver data for testing
-              setDriverDetails({
-                id: rideData.driverId,
-                name: 'Test Driver',
-                phone: '1234567890',
-                rating: 4.7,
-                autoNumber: 'KA-01-XX-1234',
-                photo: null
-              });
-              return;
-            }
-            
-            const driverData = driverSnapshot.val();
-            if (driverData) {
-              setDriverDetails({
-                id: rideData.driverId,
-                name: driverData.name || 'Driver',
-                phone: driverData.phone || 'N/A',
-                rating: driverData.rating || 4.7,
-                autoNumber: driverData.autoNumber || 'KA-01-XX-1234',
-                photo: driverData.photo || null
-              });
-            }
-          }, { onlyOnce: true });
-          
-          // Clear search timer
-          if (searchTimerRef.current) {
-            clearInterval(searchTimerRef.current);
-          }
-          
-          // Navigate to full width driver card after a delay
-          setTimeout(() => {
-            setIsArriving(false);
-          }, 3000);
-        } else if (rideData && rideData.status === 'cancelled') {
-          // Ride was cancelled (either by system or driver)
-          console.log('Ride cancelled');
-          Alert.alert(
-            'Ride Cancelled',
-            'Your ride request has been cancelled.',
-            [{ text: 'OK', onPress: () => navigation.goBack() }]
-          );
-        }
-      }, error => {
-        console.error('Error listening for driver acceptance:', error);
-        setError(`Listener error: ${error.message}`);
-      });
-    } catch (error) {
-      console.error('Error setting up driver acceptance listener:', error);
-      setError(`Setup listener error: ${error.message}`);
-    }
-  };
-  
-  // For testing: function to simulate driver acceptance
-  const simulateDriverAcceptance = () => {
-    if (!rideId) {
-      Alert.alert('Error', 'No active ride to simulate');
-      return;
-    }
-    
-    try {
-      const database = getDatabase();
-      const rideRef = ref(database, `rides/${rideId}`);
-      
-      // Update ride with a mock driver
-      set(rideRef, {
-        ...route.params,
-        status: 'accepted',
-        driverId: 'mock-driver-001'
-      });
-      
-      // Add mock driver to database
-      const driverRef = ref(database, 'drivers/mock-driver-001');
-      set(driverRef, {
-        name: 'Test Driver',
-        phone: '1234567890',
-        rating: 4.7,
-        autoNumber: 'KA-01-XX-1234',
-        photo: null
-      });
-      
-      console.log('Simulated driver acceptance');
-    } catch (error) {
-      console.error('Error simulating driver acceptance:', error);
-      setError(`Simulation error: ${error.message}`);
-    }
-  };
-  
-  const startSearchAnimation = () => {
-    Animated.loop(
-      Animated.sequence([
-        Animated.timing(searchAnimation, {
-          toValue: 1,
-          duration: 1000,
-          useNativeDriver: true
-        }),
-        Animated.timing(searchAnimation, {
-          toValue: 0,
-          duration: 1000,
-          useNativeDriver: true
-        })
-      ])
-    ).start();
-    
-    // Pulse animation for search radius
-    Animated.loop(
-      Animated.sequence([
-        Animated.timing(pulseAnimation, {
-          toValue: 1.3,
-          duration: 1000,
-          useNativeDriver: true
-        }),
-        Animated.timing(pulseAnimation, {
-          toValue: 1,
-          duration: 1000,
-          useNativeDriver: true
-        })
-      ])
-    ).start();
-  };
-  
-  const startSearchCountdown = () => {
-    console.log('Starting search countdown for', searchTimeout, 'seconds');
-    searchTimerRef.current = setInterval(() => {
-      setSearchTimeout((prev) => {
-        console.log('Search time remaining:', prev - 1);
-        if (prev <= 1) {
-          // Time's up, no driver found
-          console.log('Search timeout reached');
-          clearInterval(searchTimerRef.current);
-          handleSearchTimeout();
-          return 0;
-        }
-        return prev - 1;
-      });
-    }, 1000);
-  };
-  
-  const handleSearchTimeout = () => {
-    // If no driver found after timeout, cancel ride and show alert
-    console.log('No drivers found within time limit');
-    setSearching(false);
-    cancelRideRequest();
-    
-    Alert.alert(
-      'No Drivers Available',
-      'We couldn\'t find any drivers nearby. Please try again later.',
-      [{ text: 'OK', onPress: () => navigation.goBack() }]
+    // Add to debug info state
+    setDebugInfo(prev => 
+      prev + `\nParams received:
+ride_id: ${ride_id}
+pickup: ${pickup}
+destination: ${destination}
+price: ${price}
+Firebase initialized: ${!!db}
+All params: ${allParams.substring(0, 200)}${allParams.length > 200 ? '...' : ''}\n`
     );
-  };
-  
-  const cancelRideRequest = async () => {
-    if (!rideId) {
-      console.warn('No ride ID to cancel');
-      return;
+    
+    // Check if ride_id is valid
+    if (!ride_id) {
+      console.error('DEBUG: No ride_id provided or ride_id is invalid');
+      setDebugInfo(prev => prev + 'ERROR: No ride_id provided or ride_id is invalid\n');
+    } else {
+      console.log('DEBUG: ride_id format appears valid');
+      setDebugInfo(prev => prev + `ride_id format appears valid: ${ride_id}\n`);
+      
+      // Add check for common URL parameter encoding issues
+      if (ride_id.includes('%')) {
+        const decodedId = decodeURIComponent(ride_id);
+        console.log('DEBUG: ride_id might be URL encoded, decoded value:', decodedId);
+        setDebugInfo(prev => prev + `⚠️ ride_id might be URL encoded, decoded value: ${decodedId}\n`);
+      }
     }
     
+    // Verify Firebase Config is working correctly
     try {
-      console.log('Cancelling ride request:', rideId);
-      const database = getDatabase();
-      const rideRef = ref(database, `rides/${rideId}`);
-      
-      await set(rideRef, {
-        ...route.params,
-        status: 'cancelled',
-        cancellationReason: 'user_cancelled'
-      });
-      
-      console.log('Ride cancelled successfully');
-      
-      // Clean up listener
-      if (driverListenerRef.current) {
-        off(driverListenerRef.current);
-        console.log('Driver listener removed');
+      if (db) {
+        console.log('DEBUG: Attempting simple Firebase operation to verify connection');
+        const testRef = doc(db, 'test', 'test');
+        console.log('DEBUG: Test reference created:', testRef.path);
+        setDebugInfo(prev => prev + `Test reference created: ${testRef.path}\n`);
       }
-    } catch (error) {
-      console.error('Error cancelling ride:', error);
-      setError(`Cancel ride error: ${error.message}`);
+    } catch (err) {
+      console.error('DEBUG: Error testing Firebase connection:', err);
+      setDebugInfo(prev => prev + `ERROR testing Firebase connection: ${err.message}\n`);
     }
-  };
-  
-  const handleCancelSearch = () => {
-    if (driverFound) {
-      // If driver already found, show confirmation before cancelling
-      Alert.alert(
-        'Cancel Ride?',
-        'A driver has already accepted your ride. Are you sure you want to cancel?',
-        [
-          { text: 'No', style: 'cancel' },
-          { 
-            text: 'Yes, Cancel', 
-            style: 'destructive',
-            onPress: () => {
-              setIsCancelling(true);
-              cancelRideRequest();
-              setTimeout(() => navigation.goBack(), 1000);
-            }
-          }
-        ]
-      );
-    } else {
-      // If still searching, cancel immediately
-      setIsCancelling(true);
-      cancelRideRequest();
-      setTimeout(() => navigation.goBack(), 1000);
+  }, []);
+
+  // Set up timer for search time
+  useEffect(() => {
+    let interval;
+    if (searching) {
+      interval = setInterval(() => {
+        setSearchTime((prevTime) => prevTime + 1);
+      }, 1000);
     }
-  };
-  
+    return () => clearInterval(interval);
+  }, [searching]);
+
+  // Format time display
   const formatTime = (seconds) => {
     const mins = Math.floor(seconds / 60);
     const secs = seconds % 60;
-    return `${mins}:${secs < 10 ? '0' + secs : secs}`;
+    return `${mins}:${secs < 10 ? '0' : ''}${secs}`;
   };
-  
-  if (!region || !pickupCoords || !destinationCoords) {
+
+  // Listen for ride updates from Firestore
+  useEffect(() => {
+    if (!ride_id) {
+      const errorMsg = 'No ride ID provided';
+      console.error('DEBUG:', errorMsg);
+      setDebugInfo(prev => prev + `ERROR: ${errorMsg}\n`);
+      setError(errorMsg);
+      setLoading(false);
+      return;
+    }
+
+    // Check if ride_id is in expected format (typically a string)
+    console.log('DEBUG: ride_id type:', typeof ride_id);
+    console.log('DEBUG: ride_id value:', ride_id);
+    setDebugInfo(prev => prev + `ride_id type: ${typeof ride_id}\nride_id value: ${ride_id}\n`);
+    
+    // Sometimes URL params are encoded or have extra characters
+    const cleanRideId = String(ride_id).trim();
+    console.log('DEBUG: Cleaned ride_id:', cleanRideId);
+    setDebugInfo(prev => prev + `Cleaned ride_id: ${cleanRideId}\n`);
+    
+    console.log('DEBUG: Setting up Firestore listener for ride ID:', cleanRideId);
+    setDebugInfo(prev => prev + `Setting up Firestore listener for ride ID: ${cleanRideId}\n`);
+    
+    setLoading(true);
+
+    try {
+      // Verify database connection before proceeding
+      if (!db) {
+        throw new Error('Firebase database connection is not initialized');
+      }
+      
+      // First try to get the document directly to verify it exists
+      getDoc(doc(db, 'rides', cleanRideId))
+        .then(docSnap => {
+          if (docSnap.exists()) {
+            console.log('DEBUG: Direct check - document exists!', docSnap.id);
+            setDebugInfo(prev => prev + `Direct check - document exists with ID: ${docSnap.id}\n`);
+            const data = docSnap.data();
+            console.log('DEBUG: Document data:', JSON.stringify(data, null, 2));
+            setDebugInfo(prev => prev + `Document data preview: ${JSON.stringify(data).substring(0, 100)}...\n`);
+          } else {
+            console.error('DEBUG: Direct check - document does NOT exist!');
+            setDebugInfo(prev => prev + `ERROR: Direct check - document does NOT exist!\nVerify ride_id: ${cleanRideId} exists in 'rides' collection\n`);
+            
+            // List all rides to check if collection is accessible (limit to 5)
+            try {
+              const { collection, getDocs, query, limit } = require('firebase/firestore');
+              
+              console.log('DEBUG: Attempting to list some ride documents to verify collection access...');
+              setDebugInfo(prev => prev + 'Attempting to list some ride documents to verify collection access...\n');
+              
+              getDocs(query(collection(db, 'rides'), limit(5)))
+                .then(querySnapshot => {
+                  console.log('DEBUG: Found', querySnapshot.size, 'rides in collection');
+                  setDebugInfo(prev => prev + `Found ${querySnapshot.size} rides in collection\n`);
+                  
+                  if (querySnapshot.size > 0) {
+                    let sampleIds = [];
+                    querySnapshot.forEach(doc => {
+                      sampleIds.push(doc.id);
+                    });
+                    console.log('DEBUG: Sample ride IDs:', sampleIds);
+                    setDebugInfo(prev => prev + `Sample ride IDs: ${sampleIds.join(', ')}\n`);
+                  }
+                })
+                .catch(err => {
+                  console.error('DEBUG: Error listing ride documents:', err);
+                  setDebugInfo(prev => prev + `ERROR listing ride documents: ${err.message}\n`);
+                });
+            } catch (err) {
+              console.error('DEBUG: Error importing or executing collection query:', err);
+              setDebugInfo(prev => prev + `ERROR importing or executing collection query: ${err.message}\n`);
+            }
+          }
+        })
+        .catch(err => {
+          console.error('DEBUG: Error checking document existence:', err);
+          setDebugInfo(prev => prev + `ERROR checking document existence: ${err.message}\n`);
+        });
+      
+      // Set up the real-time listener for the document
+      const rideRef = doc(db, 'rides', cleanRideId);
+      
+      console.log('DEBUG: Created ride reference:', rideRef.path);
+      setDebugInfo(prev => prev + `Created ride reference: ${rideRef.path}\n`);
+      
+      const unsubscribe = onSnapshot(
+        rideRef,
+        (doc) => {
+          console.log('DEBUG: Received Firestore snapshot');
+          setDebugInfo(prev => prev + 'Received Firestore snapshot\n');
+          
+          if (doc.exists()) {
+            const rideData = { id: doc.id, ...doc.data() };
+            console.log('DEBUG: Ride document exists:', rideData.id);
+            console.log('DEBUG: Ride status:', rideData.status);
+            setDebugInfo(prev => prev + `Ride document exists with ID: ${rideData.id}\nStatus: ${rideData.status}\n`);
+            
+            setRide(rideData);
+
+            // Check if driver has been assigned
+            if (rideData.driver_id && rideData.status === 'accepted') {
+              console.log('DEBUG: Driver assigned:', rideData.driver_id);
+              setDebugInfo(prev => prev + `Driver assigned: ${rideData.driver_id}\n`);
+              setSearching(false);
+              fetchDriverDetails(rideData.driver_id);
+            }
+
+            // Handle ride cancellation
+            if (rideData.status === 'cancelled') {
+              console.log('DEBUG: Ride was cancelled');
+              setDebugInfo(prev => prev + 'Ride was cancelled\n');
+              Alert.alert(
+                "Ride Cancelled",
+                "Your ride has been cancelled.",
+                [
+                  { text: "OK", onPress: () => router.replace('/components/ride/BookAutoScreen') }
+                ]
+              );
+            }
+          } else {
+            const errorMsg = 'Ride not found';
+            console.error('DEBUG:', errorMsg);
+            setDebugInfo(prev => prev + `ERROR: ${errorMsg} - Document does not exist at path: 'rides/${cleanRideId}'\n`);
+            setError(errorMsg);
+          }
+          setLoading(false);
+        },
+        (err) => {
+          console.error('DEBUG: Error listening for ride updates:', err);
+          setDebugInfo(prev => prev + `ERROR listening for ride updates: ${err.message}\n`);
+          setError('Failed to load ride details: ' + err.message);
+          setLoading(false);
+        }
+      );
+
+      // Debug Firebase connection status
+      console.log('DEBUG: Firebase listener initialized');
+      setDebugInfo(prev => prev + 'Firebase listener initialized\n');
+
+      // Cleanup listener on unmount
+      return () => {
+        console.log('DEBUG: Cleaning up Firestore listener');
+        unsubscribe();
+      };
+    } catch (err) {
+      console.error('DEBUG: Error setting up ride listener:', err);
+      setDebugInfo(prev => prev + `ERROR setting up ride listener: ${err.message}\n`);
+      setError('Error setting up ride listener: ' + err.message);
+      setLoading(false);
+    }
+  }, [ride_id]);
+
+  // Fetch driver details when a driver is assigned
+  const fetchDriverDetails = async (driverId) => {
+    try {
+      console.log('DEBUG: Fetching driver details for ID:', driverId);
+      setDebugInfo(prev => prev + `Fetching driver details for ID: ${driverId}\n`);
+      
+      const driverDoc = await getDoc(doc(db, 'drivers', driverId));
+      if (driverDoc.exists()) {
+        console.log('DEBUG: Driver document found');
+        setDebugInfo(prev => prev + 'Driver document found\n');
+        setDriver(driverDoc.data());
+      } else {
+        console.error('DEBUG: Driver document does not exist');
+        setDebugInfo(prev => prev + 'ERROR: Driver document does not exist\n');
+      }
+    } catch (err) {
+      console.error('DEBUG: Error fetching driver details:', err);
+      setDebugInfo(prev => prev + `ERROR fetching driver details: ${err.message}\n`);
+    }
+  };
+
+  // Cancel ride
+  const cancelRide = async () => {
+    Alert.alert(
+      "Cancel Ride",
+      "Are you sure you want to cancel this ride?",
+      [
+        { text: "No", style: "cancel" },
+        { 
+          text: "Yes", 
+          style: "destructive",
+          onPress: async () => {
+            try {
+              console.log('DEBUG: Cancelling ride:', ride_id);
+              setDebugInfo(prev => prev + `Cancelling ride: ${ride_id}\n`);
+              
+              const rideRef = doc(db, 'rides', ride_id);
+              await updateDoc(rideRef, {
+                status: 'cancelled',
+                cancelled_at: new Date()
+              });
+              console.log('DEBUG: Ride cancelled successfully');
+              setDebugInfo(prev => prev + 'Ride cancelled successfully\n');
+              
+              router.replace('/components/ride/BookAutoScreen');
+            } catch (err) {
+              console.error('DEBUG: Error cancelling ride:', err);
+              setDebugInfo(prev => prev + `ERROR cancelling ride: ${err.message}\n`);
+              Alert.alert('Error', 'Failed to cancel ride. Please try again.');
+            }
+          }
+        }
+      ]
+    );
+  };
+
+  // Call driver
+  const callDriver = () => {
+    if (driver && driver.phone) {
+      // Implement calling functionality
+      console.log('DEBUG: Calling driver:', driver.name, driver.phone);
+      Alert.alert('Call Driver', `Calling ${driver.name} at ${driver.phone}`);
+    }
+  };
+
+  // Navigate back to BookAutoScreen
+  const handleBack = () => {
+    Alert.alert(
+      "Go Back",
+      "Going back will cancel your ride search. Are you sure?",
+      [
+        { text: "Stay Here", style: "cancel" },
+        { 
+          text: "Go Back", 
+          onPress: async () => {
+            try {
+              if (ride_id) {
+                console.log('DEBUG: Cancelling ride on back navigation:', ride_id);
+                setDebugInfo(prev => prev + `Cancelling ride on back navigation: ${ride_id}\n`);
+                
+                const rideRef = doc(db, 'rides', ride_id);
+                await updateDoc(rideRef, {
+                  status: 'cancelled',
+                  cancelled_at: new Date()
+                });
+                console.log('DEBUG: Ride cancelled on back navigation');
+              }
+              router.replace('/components/ride/BookAutoScreen');
+            } catch (err) {
+              console.error('DEBUG: Error cancelling ride on back:', err);
+              setDebugInfo(prev => prev + `ERROR cancelling ride on back: ${err.message}\n`);
+              router.replace('/components/ride/BookAutoScreen');
+            }
+          }
+        }
+      ]
+    );
+  };
+
+  if (loading) {
     return (
       <View style={styles.loadingContainer}>
-        <StatusBar barStyle="dark-content" backgroundColor="#FFFFFF" />
-        <Text style={styles.loadingText}>Loading map...</Text>
-        {error && (
-          <Text style={styles.errorText}>{error}</Text>
-        )}
+        <ActivityIndicator size="large" color="#3B82F6" />
+        <Text style={styles.loadingText}>Loading ride details...</Text>
       </View>
     );
   }
-  
-  return (
-    <View style={styles.container}>
-      <StatusBar barStyle="dark-content" backgroundColor="#FFFFFF" />
-      
-      {/* Map View */}
-      <MapView
-        ref={mapRef}
-        style={styles.map}
-        provider={PROVIDER_GOOGLE}
-        initialRegion={region}
-        showsUserLocation={true}
-        showsMyLocationButton={false}
-        toolbarEnabled={false}
-        loadingEnabled={true}
-      >
-        {/* Route Polyline */}
-        {routeCoordinates.length > 0 && (
-          <Polyline
-            coordinates={routeCoordinates}
-            strokeWidth={4}
-            strokeColor="#3B82F6"
-          />
-        )}
+
+  if (error) {
+    return (
+      <View style={styles.errorContainer}>
+        <Text style={styles.errorText}>{error}</Text>
         
-        {/* Pickup Marker */}
-        <Marker coordinate={pickupCoords} title="Pickup">
-          <View style={styles.markerContainer}>
-            <View style={styles.pickupMarker} />
-          </View>
-        </Marker>
-        
-        {/* Destination Marker */}
-        <Marker coordinate={destinationCoords} title="Destination">
-          <View style={styles.markerContainer}>
-            <View style={styles.destinationMarker} />
-          </View>
-        </Marker>
-        
-        {/* Driver location marker (shown when driver is found) */}
-        {driverFound && driverDetails && (
-          <Marker
-            coordinate={{
-              ...pickupCoords,
-              latitude: pickupCoords.latitude - 0.002 // Simulated position near pickup
-            }}
-            title={`${driverDetails.name}'s Auto`}
-          >
-            <View style={styles.driverMarker}>
-              <View style={styles.autoIconContainer} />
-            </View>
-          </Marker>
-        )}
-      </MapView>
-      
-      {/* Back Button */}
-      <TouchableOpacity
-        style={styles.backButton}
-        onPress={handleCancelSearch}
-      >
-        <ArrowLeft size={24} color="#0F172A" />
-      </TouchableOpacity>
-      
-      {/* Debug Button (for development only) */}
-      {__DEV__ && (
-        <TouchableOpacity
-          style={styles.debugButton}
-          onPress={simulateDriverAcceptance}
-        >
-          <Text style={styles.debugButtonText}>Debug: Find Driver</Text>
-        </TouchableOpacity>
-      )}
-      
-      {/* Error Display */}
-      {error && (
-        <View style={styles.errorContainer}>
-          <Text style={styles.errorText}>{error}</Text>
-          <Text style={styles.dbStatusText}>{dbConnectionStatus}</Text>
+        {/* Debug information section */}
+        <View style={styles.debugContainer}>
+          <Text style={styles.debugTitle}>Debug Information:</Text>
+          <Text style={styles.debugText}>{debugInfo}</Text>
         </View>
-      )}
-      
-      {/* Searching Card */}
-      {searching && !driverFound && !isCancelling && (
-        <View style={styles.searchingCard}>
-          <View style={styles.searchingContent}>
-            <View style={styles.searchAnimationContainer}>
-              <Animated.View
-                style={[
-                  styles.pulseCircle,
-                  {
-                    transform: [{ scale: pulseAnimation }],
-                    opacity: searchAnimation.interpolate({
-                      inputRange: [0, 1],
-                      outputRange: [0.5, 0]
-                    })
+        
+        {/* Attempt to fix the ride_id issue */}
+        <View style={styles.fixSection}>
+          <TouchableOpacity 
+            style={styles.fixButton}
+            onPress={() => {
+              // Try to manually fetch the ride data using getDoc
+              Alert.alert(
+                "Debug Action",
+                "Attempt to manually fetch ride data?",
+                [
+                  { text: "Cancel", style: "cancel" },
+                  { 
+                    text: "Try", 
+                    onPress: async () => {
+                      try {
+                        setLoading(true);
+                        const cleanId = String(ride_id).trim();
+                        console.log('DEBUG: Manual fetch attempt with ID:', cleanId);
+                        
+                        const docRef = doc(db, 'rides', cleanId);
+                        const docSnap = await getDoc(docRef);
+                        
+                        if (docSnap.exists()) {
+                          const rideData = { id: docSnap.id, ...docSnap.data() };
+                          setRide(rideData);
+                          setError(null);
+                          setDebugInfo(prev => prev + `Manual fetch SUCCESS! Found ride with ID: ${docSnap.id}\n`);
+                          
+                          if (rideData.driver_id && rideData.status === 'accepted') {
+                            setSearching(false);
+                            await fetchDriverDetails(rideData.driver_id);
+                          }
+                        } else {
+                          Alert.alert("Debug Result", "Ride document still not found. Check Firestore database.");
+                          setDebugInfo(prev => prev + `Manual fetch failed: Document still not found\n`);
+                        }
+                      } catch (err) {
+                        Alert.alert("Debug Error", `Error: ${err.message}`);
+                        setDebugInfo(prev => prev + `Manual fetch ERROR: ${err.message}\n`);
+                      } finally {
+                        setLoading(false);
+                      }
+                    }
                   }
-                ]}
-              />
-              
-            </View>
-            
-            <Text style={styles.searchingText}>
-              Looking for nearby {rideType} autos
-            </Text>
-            
-            <Text style={styles.timerText}>
-              {formatTime(searchTimeout)}
-            </Text>
-          </View>
-          
-          <TouchableOpacity
-            style={styles.cancelButton}
-            onPress={handleCancelSearch}
+                ]
+              );
+            }}
           >
-            <Text style={styles.cancelButtonText}>Cancel</Text>
+            <Text style={styles.fixButtonText}>Try Manual Fetch</Text>
+          </TouchableOpacity>
+          
+          <TouchableOpacity 
+            style={styles.createButton}
+            onPress={() => {
+              // Offer to create a test ride document
+              Alert.alert(
+                "Debug Action",
+                "Create a test ride document in Firestore?",
+                [
+                  { text: "Cancel", style: "cancel" },
+                  { 
+                    text: "Create", 
+                    onPress: async () => {
+                      try {
+                        const { setDoc, collection, addDoc } = require('firebase/firestore');
+                        
+                        setLoading(true);
+                        setDebugInfo(prev => prev + `Attempting to create a test ride document...\n`);
+                        
+                        // Create a test ride document
+                        const testRideData = {
+                          pickup: pickup || "Test Pickup",
+                          destination: destination || "Test Destination",
+                          price: price || "200",
+                          distance: distance || "5",
+                          duration: duration || "15",
+                          rideType: rideType || "auto",
+                          status: "searching",
+                          created_at: new Date(),
+                          user_id: auth.currentUser?.uid || "test_user"
+                        };
+                        
+                        // Try to use the existing ride_id if available
+                        let testRideRef;
+                        if (ride_id) {
+                          testRideRef = doc(db, 'rides', String(ride_id).trim());
+                          await setDoc(testRideRef, testRideData);
+                          setDebugInfo(prev => prev + `Created test ride with provided ID: ${ride_id}\n`);
+                        } else {
+                          testRideRef = await addDoc(collection(db, 'rides'), testRideData);
+                          setDebugInfo(prev => prev + `Created test ride with new ID: ${testRideRef.id}\n`);
+                        }
+                        
+                        Alert.alert(
+                          "Test Ride Created", 
+                          `Ride document created. ID: ${testRideRef.id || ride_id}`,
+                          [
+                            { 
+                              text: "Use This Ride", 
+                              onPress: () => {
+                                // Reload the screen with the new ride_id
+                                router.replace({
+                                  pathname: '/components/ride/RideSearchScreen',
+                                  params: {
+                                    ride_id: testRideRef.id || ride_id,
+                                    pickup: pickup || "Test Pickup",
+                                    destination: destination || "Test Destination",
+                                    price: price || "200",
+                                    distance: distance || "5",
+                                    duration: duration || "15",
+                                    rideType: rideType || "auto"
+                                  }
+                                });
+                              }
+                            }
+                          ]
+                        );
+                      } catch (err) {
+                        Alert.alert("Debug Error", `Error creating test ride: ${err.message}`);
+                        setDebugInfo(prev => prev + `ERROR creating test ride: ${err.message}\n`);
+                      } finally {
+                        setLoading(false);
+                      }
+                    }
+                  }
+                ]
+              );
+            }}
+          >
+            <Text style={styles.fixButtonText}>Create Test Ride</Text>
           </TouchableOpacity>
         </View>
-      )}
-      
-      {/* Driver Found & Arriving Notification */}
-      {driverFound && isArriving && !isCancelling && (
-        <Animated.View 
-          style={styles.driverFoundCard}
+        
+        <TouchableOpacity 
+          style={styles.backButton}
+          onPress={() => router.replace('/components/ride/BookAutoScreen')}
         >
-          <View style={styles.driverFoundHeader}>
-            <Text style={styles.driverFoundTitle}>Auto Confirmed!</Text>
+          <Text style={styles.backButtonText}>Back to Booking</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
+
+  return (
+    <View style={styles.container}>
+      <View style={styles.header}>
+        <TouchableOpacity onPress={handleBack} style={styles.backBtn}>
+          <ChevronLeft size={24} color="#0F172A" />
+        </TouchableOpacity>
+        <Text style={styles.headerTitle}>
+          {searching ? 'Finding Auto' : 'Driver Found'}
+        </Text>
+        <View style={styles.placeholder} />
+      </View>
+
+      {/* Debug floating button */}
+      <TouchableOpacity 
+        style={styles.debugButton}
+        onPress={() => Alert.alert('Debug Info', debugInfo)}
+      >
+        <Text style={styles.debugButtonText}>Debug</Text>
+      </TouchableOpacity>
+
+      {searching ? (
+        <View style={styles.searchingContainer}>
+          <View style={styles.animationContainer}>
+            <LottieView
+              source={SEARCHING_ANIMATION}
+              autoPlay
+              loop
+              style={styles.animation}
+            />
           </View>
           
-          <View style={styles.driverArriving}>
-            <Text style={styles.arrivingText}>
-              Your auto is on the way to pick you up
-            </Text>
-          </View>
-        </Animated.View>
-      )}
-      
-      {/* Driver Details Card */}
-      {driverFound && !isArriving && !isCancelling && driverDetails && (
-        <View style={styles.driverDetailsCard}>
-          <View style={styles.rideHeader}>
-            <View style={styles.rideInfo}>
-              <Text style={styles.etaText}>Driver is on the way</Text>
-              <Text style={styles.etaTime}>Arriving in 3 mins</Text>
+          <Text style={styles.searchingText}>Searching for nearby autos...</Text>
+          <Text style={styles.timeText}>Search time: {formatTime(searchTime)}</Text>
+          
+          <View style={styles.rideInfoCard}>
+            <View style={styles.rideInfoHeader}>
+              <Text style={styles.rideInfoTitle}>Ride Details</Text>
+              <Text style={styles.ridePrice}>₹{price}</Text>
             </View>
             
-            <TouchableOpacity
-              style={styles.cancelRideBtn}
-              onPress={handleCancelSearch}
-            >
-              <XCircle size={20} color="#EF4444" />
-              <Text style={styles.cancelRideText}>Cancel</Text>
-            </TouchableOpacity>
-          </View>
-          
-          <View style={styles.driverInfoContainer}>
-            <View style={styles.driverProfile}>
-              {driverDetails.photo ? (
-                <Image
-                  source={{ uri: driverDetails.photo }}
-                  style={styles.driverPhoto}
-                />
-              ) : (
-                <View style={styles.driverPhotoPlaceholder}>
-                  <User size={24} color="#64748B" />
-                </View>
-              )}
-              
-              <View style={styles.driverInfo}>
-                <Text style={styles.driverName}>{driverDetails.name}</Text>
-                <View style={styles.ratingContainer}>
-                  <Text style={styles.ratingText}>{driverDetails.rating} ★</Text>
-                </View>
+            <View style={styles.locationContainer}>
+              <View style={styles.locationIcon}>
+                <MapPin size={20} color="#3B82F6" />
+              </View>
+              <View style={styles.locationDetails}>
+                <Text style={styles.locationLabel}>Pickup</Text>
+                <Text style={styles.locationText}>{pickup}</Text>
               </View>
             </View>
             
-            <View style={styles.autoDetails}>
-              <Text style={styles.autoNumber}>{driverDetails.autoNumber}</Text>
-              <Text style={styles.autoType}>{rideType} Auto</Text>
-            </View>
-          </View>
-          
-          <View style={styles.rideDetailsSummary}>
-            <View style={styles.fareBadge}>
-              <Text style={styles.fareText}>₹{price}</Text>
-              <Text style={styles.paymentMethod}>Cash</Text>
+            <View style={styles.divider} />
+            
+            <View style={styles.locationContainer}>
+              <View style={styles.locationIcon}>
+                <Navigation size={20} color="#3B82F6" />
+              </View>
+              <View style={styles.locationDetails}>
+                <Text style={styles.locationLabel}>Destination</Text>
+                <Text style={styles.locationText}>{destination}</Text>
+              </View>
             </View>
             
             <View style={styles.rideStats}>
               <View style={styles.statItem}>
-                <Text style={styles.statValue}>{distance.toFixed(1)} km</Text>
                 <Text style={styles.statLabel}>Distance</Text>
+                <Text style={styles.statValue}>{distance} km</Text>
               </View>
-              
               <View style={styles.statItem}>
-                <Text style={styles.statValue}>{Math.round(duration)} min</Text>
                 <Text style={styles.statLabel}>Duration</Text>
+                <Text style={styles.statValue}>{duration} min</Text>
+              </View>
+              <View style={styles.statItem}>
+                <Text style={styles.statLabel}>Ride Type</Text>
+                <Text style={styles.statValue}>{rideType.charAt(0).toUpperCase() + rideType.slice(1)}</Text>
               </View>
             </View>
           </View>
           
-          <View style={styles.contactActions}>
-            <TouchableOpacity 
-              style={styles.contactButton}
-              onPress={() => Alert.alert('Call Driver', `Call ${driverDetails.name}?`)}
-            >
-              <Phone size={20} color="#FFFFFF" />
-              <Text style={styles.contactButtonText}>Call</Text>
-            </TouchableOpacity>
-            
-            <TouchableOpacity 
-              style={styles.contactButton}
-              onPress={() => Alert.alert('Message', `Send message to ${driverDetails.name}?`)}
-            >
-              <MessageSquare size={20} color="#FFFFFF" />
-              <Text style={styles.contactButtonText}>Message</Text>
-            </TouchableOpacity>
-            
-            <TouchableOpacity 
-              style={styles.contactButton}
-              onPress={() => Alert.alert('Share Trip', 'Share your trip details with friends?')}
-            >
-              <Navigation size={20} color="#FFFFFF" />
-              <Text style={styles.contactButtonText}>Share Trip</Text>
-            </TouchableOpacity>
-          </View>
+          <TouchableOpacity 
+            style={styles.cancelButton}
+            onPress={cancelRide}
+          >
+            <Text style={styles.cancelButtonText}>Cancel Search</Text>
+          </TouchableOpacity>
         </View>
-      )}
-      
-      {/* Cancelling Animation */}
-      {isCancelling && (
-        <View style={styles.cancellingOverlay}>
-          <Text style={styles.cancellingText}>Cancelling your ride...</Text>
+      ) : (
+        <View style={styles.driverFoundContainer}>
+          <View style={styles.driverCard}>
+            <Text style={styles.driverFoundText}>Driver Found!</Text>
+            
+            <View style={styles.driverProfile}>
+              <Image 
+                source={{ uri: driver?.photo_url || 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?q=80&w=400' }}
+                style={styles.driverPhoto}
+              />
+              
+              <View style={styles.driverInfo}>
+                <Text style={styles.driverName}>{driver?.name || 'Driver Name'}</Text>
+                <Text style={styles.vehicleInfo}>{driver?.vehicle_details || 'Auto Rickshaw'}</Text>
+                <View style={styles.driverRating}>
+                  {/* Add rating stars here */}
+                  <Text style={styles.ratingText}>{driver?.rating || '4.8'}</Text>
+                </View>
+              </View>
+              
+              <TouchableOpacity 
+                style={styles.callButton}
+                onPress={callDriver}
+              >
+                <Phone size={20} color="#fff" />
+              </TouchableOpacity>
+            </View>
+            
+            <View style={styles.arrivalInfo}>
+              <Text style={styles.arrivalText}>
+                Arriving in {driver?.eta || '5'} min
+              </Text>
+              <Text style={styles.vehicleNumber}>
+                {driver?.vehicle_number || 'AP 12 AB 3456'}
+              </Text>
+            </View>
+          </View>
+          
+          <View style={styles.rideInfoCard}>
+            <View style={styles.rideInfoHeader}>
+              <Text style={styles.rideInfoTitle}>Ride Details</Text>
+              <Text style={styles.ridePrice}>₹{price}</Text>
+            </View>
+            
+            <View style={styles.locationContainer}>
+              <View style={styles.locationIcon}>
+                <MapPin size={20} color="#3B82F6" />
+              </View>
+              <View style={styles.locationDetails}>
+                <Text style={styles.locationLabel}>Pickup</Text>
+                <Text style={styles.locationText}>{pickup}</Text>
+              </View>
+            </View>
+            
+            <View style={styles.divider} />
+            
+            <View style={styles.locationContainer}>
+              <View style={styles.locationIcon}>
+                <Navigation size={20} color="#3B82F6" />
+              </View>
+              <View style={styles.locationDetails}>
+                <Text style={styles.locationLabel}>Destination</Text>
+                <Text style={styles.locationText}>{destination}</Text>
+              </View>
+            </View>
+            
+            <View style={styles.rideStats}>
+              <View style={styles.statItem}>
+                <Text style={styles.statLabel}>Distance</Text>
+                <Text style={styles.statValue}>{distance} km</Text>
+              </View>
+              <View style={styles.statItem}>
+                <Text style={styles.statLabel}>Duration</Text>
+                <Text style={styles.statValue}>{duration} min</Text>
+              </View>
+              <View style={styles.statItem}>
+                <Text style={styles.statLabel}>Ride Type</Text>
+                <Text style={styles.statValue}>{rideType.charAt(0).toUpperCase() + rideType.slice(1)}</Text>
+              </View>
+            </View>
+          </View>
+          
+          <TouchableOpacity 
+            style={styles.cancelButton}
+            onPress={cancelRide}
+          >
+            <Text style={styles.cancelButtonText}>Cancel Ride</Text>
+          </TouchableOpacity>
         </View>
       )}
     </View>
@@ -801,403 +700,348 @@ export default function RideSearchScreen({ route, navigation }) {
 }
 
 const styles = StyleSheet.create({
+  fixSection: {
+    width: '100%',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: 16,
+  },
+  fixButton: {
+    backgroundColor: '#3B82F6',
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderRadius: 8,
+    flex: 1,
+    marginRight: 8,
+  },
+  createButton: {
+    backgroundColor: '#10B981',
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderRadius: 8,
+    flex: 1,
+    marginLeft: 8,
+  },
+  fixButtonText: {
+    color: '#fff',
+    fontWeight: '600',
+    fontSize: 14,
+    textAlign: 'center',
+    fontFamily: 'Inter-SemiBold',
+  },
   container: {
     flex: 1,
     backgroundColor: '#F8FAFC',
+  },
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#fff',
+    padding: 16,
+    paddingTop: 60,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E2E8F0',
+  },
+  backBtn: {
+    padding: 8,
+  },
+  headerTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: '#0F172A',
+    fontFamily: 'Inter-Bold',
+  },
+  placeholder: {
+    width: 40,
   },
   loadingContainer: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: '#FFFFFF',
-    padding: 20,
+    backgroundColor: '#F8FAFC',
   },
   loadingText: {
+    marginTop: 16,
     fontSize: 16,
     color: '#64748B',
     fontFamily: 'Inter-Regular',
-    marginBottom: 20,
-  },
-  errorText: {
-    fontSize: 14,
-    color: '#EF4444',
-    fontFamily: 'Inter-Regular',
-    textAlign: 'center',
-    marginTop: 8,
-    padding: 8,
-  },
-  dbStatusText: {
-    fontSize: 12,
-    color: '#64748B',
-    fontFamily: 'Inter-Regular',
-    marginTop: 4,
   },
   errorContainer: {
-    position: 'absolute',
-    top: 100,
-    left: 20,
-    right: 20,
-    backgroundColor: 'rgba(254, 226, 226, 0.95)',
-    padding: 12,
-    borderRadius: 12,
+    flex: 1,
+    justifyContent: 'center',
     alignItems: 'center',
+    padding: 16,
+    backgroundColor: '#F8FAFC',
   },
-  map: {
+  errorText: {
+    fontSize: 16,
+    color: '#EF4444',
+    textAlign: 'center',
+    marginBottom: 16,
+    fontFamily: 'Inter-Regular',
+  },
+  backButton: {
+    backgroundColor: '#3B82F6',
+    paddingVertical: 12,
+    paddingHorizontal: 24,
+    borderRadius: 8,
+  },
+  backButtonText: {
+    color: '#fff',
+    fontWeight: '600',
+    fontSize: 16,
+    fontFamily: 'Inter-SemiBold',
+  },
+  // Debugging styles
+  debugButton: {
+    position: 'absolute',
+    right: 16,
+    top: 120,
+    backgroundColor: '#FFA500',
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+    zIndex: 999,
+  },
+  debugButtonText: {
+    color: '#fff',
+    fontWeight: '600',
+    fontSize: 12,
+  },
+  debugContainer: {
+    backgroundColor: '#F1F5F9',
+    borderRadius: 8,
+    padding: 16,
+    marginBottom: 16,
+    width: '100%',
+    maxHeight: 300,
+  },
+  debugTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#0F172A',
+    marginBottom: 8,
+  },
+  debugText: {
+    fontSize: 12,
+    color: '#334155',
+    fontFamily: 'monospace',
+  },
+  // Searching screen
+  searchingContainer: {
+    flex: 1,
+    alignItems: 'center',
+    padding: 16,
+  },
+  animationContainer: {
+    width: 200,
+    height: 200,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginTop: 20,
+  },
+  animation: {
     width: '100%',
     height: '100%',
   },
-  backButton: {
-    position: 'absolute',
-    top: 50,
-    left: 20,
-    backgroundColor: '#FFFFFF',
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    justifyContent: 'center',
-    alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: {
-      width: 0,
-      height: 2,
-    },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
-  },
-  debugButton: {
-    position: 'absolute',
-    top: 50,
-    right: 20,
-    backgroundColor: '#3B82F6',
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: 8,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  debugButtonText: {
-    color: '#FFFFFF',
-    fontSize: 12,
-    fontFamily: 'Inter-Medium',
-  },
-  markerContainer: {
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  pickupMarker: {
-    width: 16,
-    height: 16,
-    borderRadius: 8,
-    backgroundColor: '#22C55E',
-    borderWidth: 3,
-    borderColor: '#FFFFFF',
-  },
-  destinationMarker: {
-    width: 16,
-    height: 16,
-    borderRadius: 8,
-    backgroundColor: '#EF4444',
-    borderWidth: 3,
-    borderColor: '#FFFFFF',
-  },
-  driverMarker: {
-    width: 24,
-    height: 24,
-    borderRadius: 12,
-    backgroundColor: '#3B82F6',
-    borderWidth: 2,
-    borderColor: '#FFFFFF',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  autoIconContainer: {
-    width: 14,
-    height: 14,
-    backgroundColor: '#FFFFFF',
-    borderRadius: 7,
-  },
-  searchingCard: {
-    position: 'absolute',
-    bottom: 0,
-    width: '100%',
-    backgroundColor: '#FFFFFF',
-    borderTopLeftRadius: 24,
-    borderTopRightRadius: 24,
-    paddingHorizontal: 20,
-    paddingTop: 24,
-    paddingBottom: 36,
-    shadowColor: '#000',
-    shadowOffset: {
-      width: 0,
-      height: -2,
-    },
-    shadowOpacity: 0.1,
-    shadowRadius: 6,
-    elevation: 5,
-  },
-  searchingContent: {
-    alignItems: 'center',
-    marginBottom: 24,
-  },
-  searchAnimationContainer: {
-    width: 80,
-    height: 80,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginBottom: 16,
-  },
-  pulseCircle: {
-    width: 60,
-    height: 60,
-    borderRadius: 30,
-    backgroundColor: '#3B82F6',
-    position: 'absolute',
-  },
   searchingText: {
     fontSize: 18,
+    fontWeight: '600',
+    color: '#0F172A',
+    marginTop: 16,
     fontFamily: 'Inter-SemiBold',
-    color: '#0F172A',
-    marginBottom: 8,
-    textAlign: 'center',
   },
-  timerText: {
-    fontSize: 16,
-    fontFamily: 'Inter-Regular',
+  timeText: {
+    fontSize: 14,
     color: '#64748B',
-  },
-  cancelButton: {
-    width: '100%',
-    paddingVertical: 12,
-    alignItems: 'center',
-    backgroundColor: '#F1F5F9',
-    borderRadius: 12,
-  },
-  cancelButtonText: {
-    fontSize: 16,
-    fontFamily: 'Inter-Medium',
-    color: '#0F172A',
-  },
-  driverFoundCard: {
-    position: 'absolute',
-    bottom: 0,
-    width: '100%',
-    backgroundColor: '#FFFFFF',
-    borderTopLeftRadius: 24,
-    borderTopRightRadius: 24,
-    paddingHorizontal: 20,
-    paddingVertical: 24,
-    shadowColor: '#000',
-    shadowOffset: {
-      width: 0,
-      height: -2,
-    },
-    shadowOpacity: 0.1,
-    shadowRadius: 6,
-    elevation: 5,
-  },
-  driverFoundHeader: {
-    alignItems: 'center',
-    marginBottom: 16,
-  },
-  driverFoundTitle: {
-    fontSize: 20,
-    fontFamily: 'Inter-Bold',
-    color: '#22C55E',
-    marginBottom: 4,
-  },
-  driverArriving: {
-    alignItems: 'center',
-  },
-  arrivingText: {
-    fontSize: 16,
+    marginTop: 8,
+    marginBottom: 24,
     fontFamily: 'Inter-Regular',
-    color: '#64748B',
-    textAlign: 'center',
   },
-  driverDetailsCard: {
-    position: 'absolute',
-    bottom: 0,
-    width: '100%',
-    backgroundColor: '#FFFFFF',
-    borderTopLeftRadius: 24,
-    borderTopRightRadius: 24,
-    paddingHorizontal: 20,
-    paddingTop: 20,
-    paddingBottom: 36,
-    shadowColor: '#000',
-    shadowOffset: {
-      width: 0,
-      height: -2,
-    },
-    shadowOpacity: 0.1,
-    shadowRadius: 6,
-    elevation: 5,
-  },
-  rideHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 20,
-  },
-  rideInfo: {
+  // Driver found screen
+  driverFoundContainer: {
     flex: 1,
+    padding: 16,
   },
-  etaText: {
-    fontSize: 14,
-    fontFamily: 'Inter-Regular',
-    color: '#64748B',
+  driverCard: {
+    backgroundColor: '#fff',
+    borderRadius: 12,
+    padding: 16,
+    marginBottom: 16,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 3,
+    elevation: 2,
   },
-  etaTime: {
-    fontSize: 16,
-    fontFamily: 'Inter-SemiBold',
+  driverFoundText: {
+    fontSize: 18,
+    fontWeight: '600',
     color: '#0F172A',
-  },
-  cancelRideBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 8,
-    backgroundColor: '#FEE2E2',
-  },
-  cancelRideText: {
-    fontSize: 14,
-    fontFamily: 'Inter-Medium',
-    color: '#EF4444',
-    marginLeft: 4,
-  },
-  driverInfoContainer: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 20,
+    marginBottom: 16,
+    textAlign: 'center',
+    fontFamily: 'Inter-SemiBold',
   },
   driverProfile: {
     flexDirection: 'row',
     alignItems: 'center',
+    marginBottom: 16,
   },
   driverPhoto: {
-    width: 50,
-    height: 50,
-    borderRadius: 25,
-    marginRight: 12,
-  },
-  driverPhotoPlaceholder: {
-    width: 50,
-    height: 50,
-    borderRadius: 25,
-    backgroundColor: '#E2E8F0',
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginRight: 12,
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    marginRight: 16,
   },
   driverInfo: {
-    justifyContent: 'center',
+    flex: 1,
   },
   driverName: {
-    fontSize: 16,
-    fontFamily: 'Inter-SemiBold',
+    fontSize: 18,
+    fontWeight: '600',
     color: '#0F172A',
-    marginBottom: 4,
+    fontFamily: 'Inter-SemiBold',
   },
-  ratingContainer: {
+  vehicleInfo: {
+    fontSize: 14,
+    color: '#64748B',
+    marginVertical: 2,
+    fontFamily: 'Inter-Regular',
+  },
+  driverRating: {
     flexDirection: 'row',
     alignItems: 'center',
   },
   ratingText: {
     fontSize: 14,
-    fontFamily: 'Inter-Medium',
-    color: '#64748B',
-  },
-  autoDetails: {
-    alignItems: 'flex-end',
-  },
-  autoNumber: {
-    fontSize: 16,
-    fontFamily: 'Inter-Bold',
     color: '#0F172A',
-    marginBottom: 4,
+    fontWeight: '500',
+    marginLeft: 4,
+    fontFamily: 'Inter-Medium',
   },
-  autoType: {
+  callButton: {
+    backgroundColor: '#3B82F6',
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  arrivalInfo: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    backgroundColor: '#F1F5F9',
+    borderRadius: 8,
+    padding: 12,
+  },
+  arrivalText: {
     fontSize: 14,
-    fontFamily: 'Inter-Regular',
-    color: '#64748B',
+    fontWeight: '500',
+    color: '#0F172A',
+    fontFamily: 'Inter-Medium',
   },
-  rideDetailsSummary: {
+  vehicleNumber: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#0F172A',
+    fontFamily: 'Inter-SemiBold',
+  },
+  // Ride info card - shared between searching and driver found screens
+  rideInfoCard: {
+    backgroundColor: '#fff',
+    borderRadius: 12,
+    padding: 16,
+    marginBottom: 16,
+    width: '100%',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 3,
+    elevation: 2,
+  },
+  rideInfoHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    backgroundColor: '#F1F5F9',
-    borderRadius: 16,
-    padding: 16,
-    marginBottom: 20,
+    marginBottom: 16,
   },
-  fareBadge: {
-    alignItems: 'center',
-  },
-  fareText: {
-    fontSize: 20,
-    fontFamily: 'Inter-Bold',
+  rideInfoTitle: {
+    fontSize: 16,
+    fontWeight: '600',
     color: '#0F172A',
-    marginBottom: 4,
+    fontFamily: 'Inter-SemiBold',
   },
-  paymentMethod: {
-    fontSize: 14,
-    fontFamily: 'Inter-Regular',
+  ridePrice: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: '#0F172A',
+    fontFamily: 'Inter-Bold',
+  },
+  locationContainer: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    marginBottom: 12,
+  },
+  locationIcon: {
+    marginRight: 12,
+    marginTop: 2,
+  },
+  locationDetails: {
+    flex: 1,
+  },
+  locationLabel: {
+    fontSize: 12,
     color: '#64748B',
+    fontFamily: 'Inter-Regular',
+  },
+  locationText: {
+    fontSize: 14,
+    color: '#0F172A',
+    fontFamily: 'Inter-Regular',
+  },
+  divider: {
+    height: 1,
+    backgroundColor: '#E2E8F0',
+    marginVertical: 12,
+    marginLeft: 32,
   },
   rideStats: {
     flexDirection: 'row',
+    marginTop: 16,
+    paddingTop: 16,
+    borderTopWidth: 1,
+    borderTopColor: '#E2E8F0',
   },
   statItem: {
+    flex: 1,
     alignItems: 'center',
-    marginLeft: 20,
-  },
-  statValue: {
-    fontSize: 16,
-    fontFamily: 'Inter-SemiBold',
-    color: '#0F172A',
-    marginBottom: 2,
   },
   statLabel: {
     fontSize: 12,
-    fontFamily: 'Inter-Regular',
     color: '#64748B',
+    fontFamily: 'Inter-Regular',
   },
-  contactActions: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-  },
-  contactButton: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#3B82F6',
-    paddingVertical: 12,
-    borderRadius: 12,
-    marginHorizontal: 4,
-  },
-  contactButtonText: {
-    color: '#FFFFFF',
+  statValue: {
     fontSize: 14,
+    fontWeight: '500',
+    color: '#0F172A',
+    marginTop: 4,
     fontFamily: 'Inter-Medium',
-    marginLeft: 4,
   },
-  cancellingOverlay: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    backgroundColor: 'rgba(255, 255, 255, 0.9)',
-    justifyContent: 'center',
+  cancelButton: {
+    backgroundColor: '#EF4444',
+    borderRadius: 12,
+    padding: 16,
     alignItems: 'center',
+    justifyContent: 'center',
+    width: '100%',
+    marginTop: 'auto',
   },
-  cancellingText: {
-    fontSize: 18,
+  cancelButtonText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '600',
     fontFamily: 'Inter-SemiBold',
-    color: '#EF4444',
-  }
+  },
 });
