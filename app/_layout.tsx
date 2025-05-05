@@ -33,6 +33,7 @@ export default function RootLayout() {
         <Stack.Screen name="(p2p)" options={{ headerShown: false }} />
         <Stack.Screen name="(auto)" options={{ headerShown: false }} />
         <Stack.Screen name="mode_selection" options={{ headerShown: false }} />
+        <Stack.Screen name="(admin)" options={{ headerShown: false }} />
       </Stack>
       <StatusBar style="dark" />
     </ModeProvider>

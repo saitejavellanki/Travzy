@@ -167,19 +167,25 @@ export default function LoginScreen(): JSX.Element {
             </>
           )}
         </TouchableOpacity>
-
-        <Link href="/register" asChild>
-          <TouchableOpacity style={styles.linkButton}>
-            <Text style={styles.linkText}>Don't have an account? Sign up</Text>
-          </TouchableOpacity>
-        </Link>
-
         <TouchableOpacity 
           style={styles.forgotPasswordButton}
           onPress={() => router.push('/forgot-password')}
         >
           <Text style={styles.forgotPasswordText}>Forgot password?</Text>
         </TouchableOpacity>
+
+        <Link href="/register" asChild>
+          <TouchableOpacity style={styles.linkButton}>
+            <Text style={styles.linkText}>Don't have an account? Sign up</Text>
+          </TouchableOpacity>
+        </Link>
+        <View style={styles.adminLinkContainer}>
+           <Text style={styles.adminLinkText}>Are you an administrator?</Text>
+            <TouchableOpacity onPress={() => router.push('/admin/login')}>
+             <Text style={styles.adminLink}>Admin Login</Text>
+          </TouchableOpacity>
+        </View>
+        
       </View>
     </View>
   );
@@ -283,5 +289,22 @@ const styles = StyleSheet.create({
     color: '#64748B',
     fontSize: 14,
     fontFamily: 'Inter-Medium',
+  },
+  adminLinkContainer: {
+    marginTop: 24,
+    alignItems: 'center',
+    paddingTop: 16,
+    borderTopWidth: 1,
+    borderTopColor: '#E2E8F0',
+  },
+  adminLinkText: {
+    fontSize: 14,
+    color: '#64748B',
+    marginBottom: 8,
+  },
+  adminLink: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#3B82F6',
   },
 });

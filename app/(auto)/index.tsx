@@ -1,14 +1,13 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { View, Text, StyleSheet, TextInput, TouchableOpacity, ScrollView, ActivityIndicator, Modal, Image, Keyboard, Alert } from 'react-native';
+import { View, Text, StyleSheet, TextInput, TouchableOpacity, ScrollView, ActivityIndicator, Modal, Image, Keyboard, Alert, Linking } from 'react-native';
 import { MapPin, Navigation, ChevronRight, X, Crosshair, Search, XCircle } from 'lucide-react-native';
 import { auth, db } from '../../firebase/Config';
-import { collection, addDoc, getDocs,getDoc, doc, query, where, Timestamp } from 'firebase/firestore';
+import { collection, addDoc, getDocs, getDoc, doc, query, where, Timestamp } from 'firebase/firestore';
 import * as Location from 'expo-location';
 import { router } from 'expo-router';
 import { GooglePlacesAutocomplete } from 'react-native-google-places-autocomplete';
 import 'react-native-get-random-values';
 import { v4 as uuidv4 } from 'uuid';
-
 
 // Add your Google API key here
 const GOOGLE_PLACES_API_KEY = 'AIzaSyDcifgYhYDinAJCQbIL1Sqgr-oV0awByiE';
@@ -28,6 +27,9 @@ const VIT_AP_LOCATION = {
 
 // Maximum allowed distance (in km)
 const MAX_DISTANCE_KM = 60;
+
+// Manager's WhatsApp number (replace with actual number)
+const MANAGER_WHATSAPP_NUMBER = '917989781645'; // Format: country code + number without '+' sign
 
 export default function BookAutoScreen() {
   const [pickup, setPickup] = useState(VIT_AP_LOCATION.description);
@@ -359,9 +361,9 @@ const showDistanceAlert = (type, isCurrentLocation = false) => {
   const calculatePrices = (distanceKm) => {
     // Base pricing model (these values would ideally come from your backend)
     const basePrice = 20; // Base fare in rupees
-    const perKmRegular = 12; // Per km fare for regular auto
-    const perKmPremium = 18; // Per km fare for premium auto
-    const perKmShared = 8; // Per km fare for shared auto
+    const perKmRegular = 8; // Per km fare for regular auto
+    const perKmPremium = 12; // Per km fare for premium auto
+    const perKmShared = 6; // Per km fare for shared auto
     
     return {
       regular: Math.round(basePrice + (distanceKm * perKmRegular)),
@@ -406,91 +408,291 @@ const showDistanceAlert = (type, isCurrentLocation = false) => {
     }
   };
 
-  // Handle booking confirmation and navigate to RideSearchScreen
-  // Fix for the confirmRideBooking function
-const confirmRideBooking = async () => {
-  // Check if destination details are available
-  if (!pickupDetails || !destinationDetails) {
-    alert('Location details are incomplete. Please try again.');
-    return;
-  }
+   // New function to send WhatsApp message to manager
+   const sendWhatsAppMessage = async (rideDetails) => {
+    try {
+      // Get current user's profile information
+      const currentUser = auth.currentUser;
+      if (!currentUser) {
+        console.error('User not logged in');
+        return;
+      }
+      
+      // Get user profile data - this assumes you have a 'users' collection with user profiles
+      const userDoc = await getDoc(doc(db, 'users', currentUser.uid));
+      const userData = userDoc.data();
+      
+      if (!userData) {
+        console.error('User profile not found');
+        return;
+      }
+      
+      // Format the message
+      const message = `*New Auto Ride Request*
+      
+*Passenger:* ${userData.name || 'Not Available'}
+*Phone:* ${userData.phone || currentUser.phoneNumber || 'Not Available'}
+*Pickup:* ${rideDetails.pickup.name || rideDetails.pickup.address}
+*Destination:* ${rideDetails.destination.name || rideDetails.destination.address}
+*Distance:* ${rideDetails.distance.toFixed(2)} km
+*Duration:* ${Math.round(rideDetails.duration)} min
+*Auto Type:* ${rideDetails.ride_type.charAt(0).toUpperCase() + rideDetails.ride_type.slice(1)}
+*Fare:* ₹${rideDetails.price}
+*Booking ID:* ${rideDetails.ride_id || 'Not Available'}`;
+      
+      // Encode the message for WhatsApp URL
+      const encodedMessage = encodeURIComponent(message);
+      
+      // Create the WhatsApp URL
+      const whatsappUrl = `whatsapp://send?phone=${MANAGER_WHATSAPP_NUMBER}&text=${encodedMessage}`;
+      
+      // Check if WhatsApp is installed
+      const canOpen = await Linking.canOpenURL(whatsappUrl);
+      
+      if (canOpen) {
+        await Linking.openURL(whatsappUrl);
+      } else {
+        // If WhatsApp is not installed, show browser alternative
+        const webWhatsappUrl = `https://wa.me/${MANAGER_WHATSAPP_NUMBER}?text=${encodedMessage}`;
+        await Linking.openURL(webWhatsappUrl);
+      }
+    } catch (error) {
+      console.error('Error sending WhatsApp message:', error);
+      Alert.alert(
+        'WhatsApp Error',
+        'Could not send details to manager via WhatsApp. Please contact them directly.',
+        [{ text: 'OK' }]
+      );
+    }
+  };
+  const notifyManager = async (rideDetails) => {
+    try {
+      // Get current user's profile information
+      const currentUser = auth.currentUser;
+      if (!currentUser) {
+        console.error('User not logged in');
+        return false;
+      }
+      
+      // Get user profile data
+      const userDoc = await getDoc(doc(db, 'users', currentUser.uid));
+      const userData = userDoc.data();
+      
+      if (!userData) {
+        console.error('User profile not found');
+        return false;
+      }
+      
+      // Create notification data to be sent to the manager
+      const notificationData = {
+        type: 'new_ride_request',
+        passenger_id: currentUser.uid,
+        passenger_name: userData.name || 'Unknown User',
+        passenger_phone: userData.phone || currentUser.phoneNumber || 'N/A',
+        pickup_location: rideDetails.pickup.name || rideDetails.pickup.address,
+        destination: rideDetails.destination.name || rideDetails.destination.address,
+        distance: rideDetails.distance.toFixed(2),
+        duration: Math.round(rideDetails.duration),
+        auto_type: rideDetails.ride_type,
+        fare: rideDetails.price,
+        ride_id: rideDetails.ride_id,
+        created_at: Timestamp.now(),
+        status: 'unread'
+      };
+      
+      // Save notification to 'manager_notifications' collection in Firestore
+      await addDoc(collection(db, 'manager_notifications'), notificationData);
+      
+      // This is where you could also trigger a push notification, SMS, or other notification to the manager
+      // You'd typically implement this via Firebase Cloud Functions
   
-  // Get the price for the selected ride type
-  const selectedPrice = prices[selectedRideType];
-  
-  try {
-    // Show loading state
-    setCalculatingPrice(true);
-    
-    const currentUser = auth.currentUser;
-    if (!currentUser) {
-      alert('You must be logged in to book a ride');
+      return true;
+    } catch (error) {
+      console.error('Error notifying manager:', error);
+      return false;
+    }
+  };
+
+
+  //FailSafe Confirm Booking Screen
+  // Updated confirmRideBooking function that navigates to the new RideConfirmationScreen
+  const confirmRideBooking = async () => {
+    // Check if destination details are available
+    if (!pickupDetails || !destinationDetails) {
+      alert('Location details are incomplete. Please try again.');
       return;
     }
     
-    // Generate a custom ID for the document (optional)
-    // const newId = uuidv4(); - Remove this if using Firestore's auto-ID
+    // Get the price for the selected ride type
+    const selectedPrice = prices[selectedRideType];
     
-    // Create ride data object - REMOVE ride_id field since Firestore will generate a document ID
-    const rideData = {
-      user_id: currentUser.uid,
-      pickup: {
-        name: pickupDetails.description || '',
-        address: pickupDetails.address || pickupDetails.description || '',
-        latitude: pickupDetails.geometry?.location?.lat || 0,
-        longitude: pickupDetails.geometry?.location?.lng || 0
-      },
-      destination: {
-        name: destinationDetails.description || '',
-        address: destinationDetails.address || destinationDetails.description || '',
-        latitude: destinationDetails.geometry?.location?.lat || 0,
-        longitude: destinationDetails.geometry?.location?.lng || 0
-      },
-      distance: distance || 0,
-      duration: duration || 0,
-      price: selectedPrice || 0,
-      ride_type: selectedRideType || 'regular',
-      status: 'searching', // Initial status
-      created_at: Timestamp.now(),
-      driver_id: null, // Will be assigned later
-      completed_at: null
-    };
-    
-    // Save to Firebase and wait for the operation to complete
-    const rideRef = await addDoc(collection(db, 'rides'), rideData);
-    console.log('Ride saved with ID:', rideRef.id);
-    
-    // IMPORTANT: Make a second operation to confirm the document exists
-    // This ensures we don't navigate before the document is confirmed created
-    const docCheck = await getDoc(doc(db, 'rides', rideRef.id));
-    
-    if (!docCheck.exists()) {
-      throw new Error('Ride document was not created properly');
+    try {
+      // Show loading state
+      setCalculatingPrice(true);
+      
+      const currentUser = auth.currentUser;
+      if (!currentUser) {
+        alert('You must be logged in to book a ride');
+        return;
+      }
+      
+      // Create ride data object
+      const rideData = {
+        user_id: currentUser.uid,
+        pickup: {
+          name: pickupDetails.description || '',
+          address: pickupDetails.address || pickupDetails.description || '',
+          latitude: pickupDetails.geometry?.location?.lat || 0,
+          longitude: pickupDetails.geometry?.location?.lng || 0
+        },
+        destination: {
+          name: destinationDetails.description || '',
+          address: destinationDetails.address || destinationDetails.description || '',
+          latitude: destinationDetails.geometry?.location?.lat || 0,
+          longitude: destinationDetails.geometry?.location?.lng || 0
+        },
+        distance: distance || 0,
+        duration: duration || 0,
+        price: selectedPrice || 0,
+        ride_type: selectedRideType || 'regular',
+        status: 'confirmed',
+        created_at: Timestamp.now(),
+        driver_id: null,
+        completed_at: null
+      };
+      
+      // For debugging - log the destination data before saving
+      console.log('Destination data being saved:', rideData.destination);
+      
+      // Save to Firebase and wait for the operation to complete
+      const rideRef = await addDoc(collection(db, 'auto_rides'), rideData);
+      console.log('Ride saved with ID:', rideRef.id);
+      
+      // IMPORTANT: Make a second operation to confirm the document exists
+      const docCheck = await getDoc(doc(db, 'auto_rides', rideRef.id));
+      
+      if (!docCheck.exists()) {
+        throw new Error('Ride document was not created properly');
+      }
+      
+      // Log the saved document data to verify
+      console.log('Saved document data:', docCheck.data());
+      
+      // Add the ride_id to the rideData object for notification
+      const rideDataWithId = {
+        ...rideData,
+        ride_id: rideRef.id
+      };
+      
+      // Directly notify the manager about the ride (no user prompt)
+      const notificationSent = await notifyManager(rideDataWithId);
+      
+      // Navigate to confirmation screen
+      navigateToConfirmation(rideRef.id, notificationSent);
+      
+    } catch (error) {
+      console.error('Error saving ride to Firebase:', error);
+      alert('Failed to book your ride. Please try again.');
+    } finally {
+      setCalculatingPrice(false);
+      setShowPricing(false);
     }
-    
-    // Close the modal
-    setShowPricing(false);
-    
-    // Navigate with params
+  };
+//Helper function
+  const navigateToConfirmation = (rideId, notificationSent = true) => {
     router.push({
-      pathname: '/components/ride/RideSearchScreen',
+      pathname: '/components/RideConfirmationScreen',
       params: { 
-        ride_id: rideRef.id, // Pass the Firebase document ID
-        pickup: pickupDetails.description,
-        destination: destinationDetails.description,
-        distance,
-        duration,
-        price: selectedPrice,
-        rideType: selectedRideType
+        ride_id: rideId,
+        manager_notified: notificationSent ? 'true' : 'false' // Pass this parameter to show appropriate message
       }
     });
-  } catch (error) {
-    console.error('Error saving ride to Firebase:', error);
-    alert('Failed to book your ride. Please try again.');
-  } finally {
-    setCalculatingPrice(false);
-  }
-};
+  };
+  // Handle booking confirmation and navigate to RideSearchScreen
+  // Fix for the confirmRideBooking function
+// const confirmRideBooking = async () => {
+//   // Check if destination details are available
+//   if (!pickupDetails || !destinationDetails) {
+//     alert('Location details are incomplete. Please try again.');
+//     return;
+//   }
+  
+//   // Get the price for the selected ride type
+//   const selectedPrice = prices[selectedRideType];
+  
+//   try {
+//     // Show loading state
+//     setCalculatingPrice(true);
+    
+//     const currentUser = auth.currentUser;
+//     if (!currentUser) {
+//       alert('You must be logged in to book a ride');
+//       return;
+//     }
+    
+//     // Generate a custom ID for the document (optional)
+//     // const newId = uuidv4(); - Remove this if using Firestore's auto-ID
+    
+//     // Create ride data object - REMOVE ride_id field since Firestore will generate a document ID
+//     const rideData = {
+//       user_id: currentUser.uid,
+//       pickup: {
+//         name: pickupDetails.description || '',
+//         address: pickupDetails.address || pickupDetails.description || '',
+//         latitude: pickupDetails.geometry?.location?.lat || 0,
+//         longitude: pickupDetails.geometry?.location?.lng || 0
+//       },
+//       destination: {
+//         name: destinationDetails.description || '',
+//         address: destinationDetails.address || destinationDetails.description || '',
+//         latitude: destinationDetails.geometry?.location?.lat || 0,
+//         longitude: destinationDetails.geometry?.location?.lng || 0
+//       },
+//       distance: distance || 0,
+//       duration: duration || 0,
+//       price: selectedPrice || 0,
+//       ride_type: selectedRideType || 'regular',
+//       status: 'searching', // Initial status
+//       created_at: Timestamp.now(),
+//       driver_id: null, // Will be assigned later
+//       completed_at: null
+//     };
+    
+//     // Save to Firebase and wait for the operation to complete
+//     const rideRef = await addDoc(collection(db, 'rides'), rideData);
+//     console.log('Ride saved with ID:', rideRef.id);
+    
+//     // IMPORTANT: Make a second operation to confirm the document exists
+//     // This ensures we don't navigate before the document is confirmed created
+//     const docCheck = await getDoc(doc(db, 'rides', rideRef.id));
+    
+//     if (!docCheck.exists()) {
+//       throw new Error('Ride document was not created properly');
+//     }
+    
+//     // Close the modal
+//     setShowPricing(false);
+    
+//     // Navigate with params
+//     router.push({
+//       pathname: '/components/ride/RideSearchScreen',
+//       params: { 
+//         ride_id: rideRef.id, // Pass the Firebase document ID
+//         pickup: pickupDetails.description,
+//         destination: destinationDetails.description,
+//         distance,
+//         duration,
+//         price: selectedPrice,
+//         rideType: selectedRideType
+//       }
+//     });
+//   } catch (error) {
+//     console.error('Error saving ride to Firebase:', error);
+//     alert('Failed to book your ride. Please try again.');
+//   } finally {
+//     setCalculatingPrice(false);
+//   }
+// };
   // Close keyboard when tapping outside input fields
   const handlePressOutside = () => {
     Keyboard.dismiss();
@@ -540,6 +742,9 @@ const renderGooglePlacesInput = (type) => {
         placeholder={placeholder}
         minLength={2}
         onPress={(data, details = null) => {
+          // Log the details to see what we're getting
+          console.log(`${type} details:`, details);
+          
           if (isPickup) {
             // Apply distance check for pickup as well
             if (details && !isWithinMaxDistance(details)) {
@@ -548,7 +753,25 @@ const renderGooglePlacesInput = (type) => {
             }
             
             setPickup(data.description);
-            setPickupDetails(details || data);
+            
+            // Ensure pickupDetails is properly set with all necessary fields
+            const locationDetails = {
+              description: data.description,
+              address: data.description, // Use description as fallback for address
+              geometry: {
+                location: {
+                  lat: details?.geometry?.location?.lat || 0,
+                  lng: details?.geometry?.location?.lng || 0
+                }
+              }
+            };
+            
+            // If details has a formatted_address, use that
+            if (details?.formatted_address) {
+              locationDetails.address = details.formatted_address;
+            }
+            
+            setPickupDetails(locationDetails);
           } else {
             // For destination, check if it's within the maximum distance
             if (details && !isWithinMaxDistance(details)) {
@@ -557,7 +780,26 @@ const renderGooglePlacesInput = (type) => {
             }
             
             setDestination(data.description);
-            setDestinationDetails(details || data);
+            
+            // Ensure destinationDetails is properly set with all necessary fields
+            const locationDetails = {
+              description: data.description,
+              address: data.description, // Use description as fallback for address
+              geometry: {
+                location: {
+                  lat: details?.geometry?.location?.lat || 0,
+                  lng: details?.geometry?.location?.lng || 0
+                }
+              }
+            };
+            
+            // If details has a formatted_address, use that
+            if (details?.formatted_address) {
+              locationDetails.address = details.formatted_address;
+            }
+            
+            setDestinationDetails(locationDetails);
+            console.log("Updated destination details:", locationDetails);
           }
           setFocused(false);
         }}
