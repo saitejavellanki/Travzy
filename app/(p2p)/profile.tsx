@@ -69,7 +69,7 @@ export default function ProfileScreen() {
       await logOut();
       
       // Navigate to login screen
-      router.replace('/login');
+      router.replace('/(auth)');
     } catch (err) {
       Alert.alert('Error', err instanceof Error ? err.message : 'Failed to log out');
     } finally {
