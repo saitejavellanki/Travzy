@@ -181,7 +181,7 @@ export default function LoginScreen(): JSX.Element {
         </Link>
         <View style={styles.adminLinkContainer}>
            <Text style={styles.adminLinkText}>Are you an administrator?</Text>
-            <TouchableOpacity onPress={() => router.push('/admin/login')}>
+            <TouchableOpacity onPress={() => router.push('/(admin)/login')}>
              <Text style={styles.adminLink}>Admin Login</Text>
           </TouchableOpacity>
         </View>
